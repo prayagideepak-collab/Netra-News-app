@@ -27,4 +27,26 @@ jobs:
         with:
           gradle-version: '9.3.1'
       - name: Compile, unit tests and lint (no signing or APK release)
-        run: gradle --no-daemon :app:compileDebugKotlin :app:testDebugUnitTest :app:lintDebug
+        run: |
+          set +e
+          gradle --no-daemon --continue :app:compileDebugKotlin :app:testDebugUnitTest :app:lintDebug
+          build_status=$?
+          echo '::group::Lint error details'
+          find app/build -name lint-results-debug.txt -type f -exec grep -n -A 5 'Error:' {} \;
+          echo '::endgroup::'
+          echo '::group::Unit test summaries'
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          reports = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.xml'))
+          totals = dict(tests=0, failures=0, errors=0, skipped=0)
+          for report in reports:
+              suite = ET.parse(report).getroot()
+              for key in totals:
+                  totals[key] += int(suite.attrib.get(key, 0))
+          print('report_files:', len(reports), 'totals:', totals)
+          if not reports:
+              print('No unit-test XML reports found; test result is unverified.')
+          PYTEST
+          echo '::endgroup::'
+          exit "$build_status"
