@@ -269,7 +269,15 @@ class NetraViewModel(
                     isPrivateEndpointConnected = false // Honest Stage-1 state: private Worker+D1 not yet connected
                 )
                 viewModelScope.launch {
-                    repository.saveLocalFeedbackDraft(validation.sanitizedPayload)
+                    try {
+                        repository.saveLocalFeedbackDraft(validation.sanitizedPayload)
+                    } catch (e: Exception) {
+                        _uiState.update { it.copy(
+                            feedbackStatusMessage = if (isHi) "ड्राफ्ट सहेजा नहीं गया। फिर प्रयास करें।" else "Draft was not saved. Try again.",
+                            feedbackStatusIsError = true
+                        ) }
+                        return@launch
+                    }
                     val msg = when (delivery) {
                         is FeedbackDeliveryResult.DisabledBackendSavedLocalDraftOnly -> {
                             if (isHi) delivery.honestUnavailableMessageHi else delivery.honestUnavailableMessageEn
