@@ -646,29 +646,12 @@ object ValidationAndRightsEngine {
             )
         }
 
-        if (simulateNetworkFailure) {
-            return FeedbackDeliveryResult.NetworkOrServerFailure(
-                errorMessageHi = "नेटवर्क त्रुटि: सर्वर से स्थायी रसीद (Receipt ID) प्राप्त नहीं हुई। आप उसी Idempotency Token (${validatedPayload.idempotencyToken}) के साथ पुनः प्रयास कर सकते हैं।",
-                errorMessageEn = "Network failure: Server did not confirm durable insert. Safe to retry with idempotency token ${validatedPayload.idempotencyToken}.",
-                canRetryWithSameIdempotencyToken = true
-            )
-        }
-
-        // Idempotent duplicate retry check
-        val existingReceipt = existingIdempotencyReceipts[validatedPayload.idempotencyToken]
-        if (existingReceipt != null) {
-            return FeedbackDeliveryResult.DurableServerReceipt(
-                receiptId = existingReceipt,
-                serverTimestampIso = serverNowIso,
-                deduplicatedRetry = true
-            )
-        }
-
-        val newReceiptId = "rcpt-${validatedPayload.feedbackId}"
-        return FeedbackDeliveryResult.DurableServerReceipt(
-            receiptId = newReceiptId,
-            serverTimestampIso = serverNowIso,
-            deduplicatedRetry = false
+        // A boolean or local idempotency map is not evidence of a durable server insert.
+        // No transport is implemented, so this helper must never mint a receipt.
+        return FeedbackDeliveryResult.NetworkOrServerFailure(
+            errorMessageHi = "सर्वर रसीद अनुपलब्ध। कोई रिमोट सबमिशन नहीं हुआ।",
+            errorMessageEn = "No server receipt available. Nothing was submitted remotely.",
+            canRetryWithSameIdempotencyToken = true
         )
     }
 
