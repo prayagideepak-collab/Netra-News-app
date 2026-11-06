@@ -207,6 +207,17 @@ object CityLocationEngine {
      * - Uses LocationManager.NETWORK_PROVIDER (or PASSIVE_PROVIDER fallback) with a strict 6s timeout.
      * - Immediately zeroes out temporary coordinates in `finally` block and removes listener.
      */
+    /** Pure freshness guard used for cached and callback fixes. */
+    fun isUsableApproximateFix(ageMs: Long, accuracyM: Float, latitude: Double, longitude: Double): Boolean =
+        ageMs in 0..(15L * 60L * 1000L) && accuracyM.isFinite() && accuracyM > 0f &&
+            latitude.isFinite() && longitude.isFinite() && latitude in -90.0..90.0 && longitude in -180.0..180.0
+
+    private fun isUsableApproximateFix(location: Location): Boolean =
+        location.hasAccuracy() && isUsableApproximateFix(
+            (android.os.SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000L,
+            location.accuracy, location.latitude, location.longitude
+        )
+
     @SuppressLint("MissingPermission")
     suspend fun detectApproximateCityForeground(context: Context): CityResolutionResult {
         if (!hasCoarseLocationPermission(context)) {
@@ -244,8 +255,7 @@ object CityLocationEngine {
                 null
             }
 
-            val freshOrCached: Location? = if (lastKnown != null &&
-                (System.currentTimeMillis() - lastKnown.time) < 30L * 60L * 1000L
+            val freshOrCached: Location? = if (lastKnown != null && isUsableApproximateFix(lastKnown)
             ) {
                 lastKnown
             } else {
@@ -277,13 +287,13 @@ object CityLocationEngine {
                             }
                         } catch (e: Exception) {
                             locationManager.removeUpdates(listener)
-                            if (cont.isActive) cont.resume(lastKnown)
+                            if (cont.isActive) cont.resume(null)
                         }
                     }
-                } ?: lastKnown
+                }
             }
 
-            if (freshOrCached == null) {
+            if (freshOrCached == null || !isUsableApproximateFix(freshOrCached)) {
                 return CityResolutionResult.FallbackToManual(
                     reasonHi = "अनुमानित स्थान समय-सीमा (6 सेकंड) समाप्त। कृपया अपना राज्य व शहर मैनुअल रूप से चुनें।",
                     reasonEn = "Approximate location timed out safely (6s). Please select your State & City manually."
