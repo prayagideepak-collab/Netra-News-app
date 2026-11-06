@@ -42,10 +42,10 @@ object ValidationAndRightsEngine {
             feedUrl = "https://pib.gov.in/RssMain.aspx",
             coverageScopes = listOf(NewsScope.LOCAL, NewsScope.STATE, NewsScope.NATIONAL),
             updateCadenceMinutes = 30,
-            termsReviewed = true,
-            defaultRightsStatus = RightsStatus.ORIGINAL,
+            termsReviewed = false,
+            defaultRightsStatus = RightsStatus.LINK_ONLY,
             licenceSummaryHi = "भारत सरकार की आधिकारिक सार्वजनिक विज्ञप्ति (स्रोत श्रेय सहित संक्षिप्त विवरण अनुमत)",
-            licenceSummaryEn = "Official Government of India Public Release (summary permitted with attribution)"
+            licenceSummaryEn = "Publisher permission not verified; link-only until evidence is reviewed"
         ),
         SourceAllowlistEntry(
             sourceId = "dd-news",
@@ -55,7 +55,7 @@ object ValidationAndRightsEngine {
             feedUrl = "https://ddnews.gov.in/rss",
             coverageScopes = listOf(NewsScope.LOCAL, NewsScope.STATE, NewsScope.NATIONAL),
             updateCadenceMinutes = 30,
-            termsReviewed = true,
+            termsReviewed = false,
             defaultRightsStatus = RightsStatus.LINK_ONLY,
             licenceSummaryHi = "प्रसार भारती सार्वजनिक प्रसारक — पूर्ण लेख पुनः प्रकाशन अनुमति प्रमाणित होने तक केवल शीर्षक व स्रोत लिंक",
             licenceSummaryEn = "Prasar Bharati Public Broadcaster — Link-out only until full text republication permission is verified"
@@ -68,7 +68,7 @@ object ValidationAndRightsEngine {
             feedUrl = "https://newsonair.gov.in/rss",
             coverageScopes = listOf(NewsScope.LOCAL, NewsScope.STATE, NewsScope.NATIONAL),
             updateCadenceMinutes = 30,
-            termsReviewed = true,
+            termsReviewed = false,
             defaultRightsStatus = RightsStatus.LINK_ONLY,
             licenceSummaryHi = "आकाशवाणी क्षेत्रीय व राष्ट्रीय बुलेटिन — केवल स्रोत-लेबल लिंक-आउट (Link-Only)",
             licenceSummaryEn = "AIR Regional & National Bulletins — Source-labelled link-out only"
@@ -81,8 +81,8 @@ object ValidationAndRightsEngine {
             feedUrl = "https://mausam.imd.gov.in/imd_latest/contents/subdivisionwise-warning.php",
             coverageScopes = listOf(NewsScope.LOCAL, NewsScope.STATE, NewsScope.NATIONAL),
             updateCadenceMinutes = 60,
-            termsReviewed = true,
-            defaultRightsStatus = RightsStatus.ORIGINAL,
+            termsReviewed = false,
+            defaultRightsStatus = RightsStatus.LINK_ONLY,
             licenceSummaryHi = "आधिकारिक मौसम बुलेटिन एवं चेतावनी डेटा (गैर-आपातकालीन सूचना प्रदर्शन)",
             licenceSummaryEn = "Official meteorological bulletin data (informational display with source link)"
         ),
@@ -94,8 +94,8 @@ object ValidationAndRightsEngine {
             feedUrl = "https://seismo.gov.in/",
             coverageScopes = listOf(NewsScope.LOCAL, NewsScope.STATE, NewsScope.NATIONAL),
             updateCadenceMinutes = 60,
-            termsReviewed = true,
-            defaultRightsStatus = RightsStatus.ORIGINAL,
+            termsReviewed = false,
+            defaultRightsStatus = RightsStatus.LINK_ONLY,
             licenceSummaryHi = "आधिकारिक भूकंप घटना लॉग (यह भूकंप भविष्यवाणी या पूर्व-चेतावनी प्रणाली नहीं है)",
             licenceSummaryEn = "Official seismic event bulletin (Not an earthquake prediction or early-warning system)"
         ),
@@ -107,7 +107,7 @@ object ValidationAndRightsEngine {
             feedUrl = "https://information.up.gov.in/",
             coverageScopes = listOf(NewsScope.LOCAL, NewsScope.STATE),
             updateCadenceMinutes = 60,
-            termsReviewed = true,
+            termsReviewed = false,
             defaultRightsStatus = RightsStatus.LINK_ONLY,
             licenceSummaryHi = "राज्य सूचना निदेशालय — स्रोत लिंक-आउट मोड",
             licenceSummaryEn = "State Information Directorate — Source link-out mode"
@@ -230,7 +230,8 @@ object ValidationAndRightsEngine {
      */
     fun isVerificationCheckStale(verificationCheckedAtIso: String?, referenceNowEpochMs: Long): Boolean {
         val checkedMs = parseSourceTimestampEpochMs(verificationCheckedAtIso) ?: return true
-        return (referenceNowEpochMs - checkedMs) > STALE_THRESHOLD_MS
+        val ageMs = referenceNowEpochMs - checkedMs
+        return ageMs < 0L || ageMs > STALE_THRESHOLD_MS
     }
 
     /**
