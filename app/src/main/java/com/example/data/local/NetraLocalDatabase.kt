@@ -12,16 +12,20 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.domain.ArticleRecord
 import com.example.domain.CorrectionEntry
+import com.example.domain.EditorialState
+import com.example.domain.FeedbackIssueType
+import com.example.domain.FeedbackReviewStatus
+import com.example.domain.FeedbackSubmissionPayload
 import com.example.domain.NewsScope
 import com.example.domain.RightsStatus
 import com.example.domain.VerificationStatus
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Room Local Persistence Layer (Section 3.1, 3.5 & Efficiency Rules):
+ * Room Local Persistence Layer (Build Specification v3, Sections 3.1, 3.5, 7, 8):
  * - Caches ONLY rights-permitted metadata/summaries locally; never downloads full copyrighted prose.
- * - Batches database writes via @Insert(onConflict = REPLACE) on list collections.
- * - Keeps bookmarks 100% local on device (no account/cloud sync).
+ * - Preserves verificationStatus (Verified/Pending/Blocked) separate from editorialState (Active/Corrected/Retracted).
+ * - Stores local-only bookmarks and optional local feedback drafts on the user's device.
  * - Maintains a bounded, rotated local health log (max 100 rows).
  */
 
@@ -40,10 +44,13 @@ data class CachedArticleEntity(
     val publishedAtIso: String?,
     val fetchedAtEpochMs: Long,
     val verifiedAtIso: String?,
+    val verificationCheckedAtIso: String?,
+    val verificationReason: String?,
     val verificationStatusWire: String,
     val rightsStatusWire: String,
-    val permittedSummary: String?, // Null if LINK_ONLY
-    val correctionsPipeDelimited: String, // "iso::reason||iso::reason"
+    val editorialStateWire: String,
+    val permittedSummary: String?, // Null if LINK_ONLY or BLOCKED
+    val correctionsPipeDelimited: String,
     val expiryIso: String?,
     val isBreakingOrLive: Boolean,
     val consolidatedSourcesCsv: String
@@ -62,6 +69,30 @@ data class CachedArticleEntity(
             .filter { it.isNotEmpty() }
             .ifEmpty { listOf(publisherName) }
 
+        val vStatus = VerificationStatus.fromWire(verificationStatusWire)
+        val rStatus = RightsStatus.fromWire(rightsStatusWire)
+        val eState = EditorialState.fromWire(editorialStateWire)
+
+        val safeSummary = if (rStatus == RightsStatus.LINK_ONLY ||
+            rStatus == RightsStatus.BLOCKED ||
+            vStatus == VerificationStatus.BLOCKED ||
+            eState == EditorialState.RETRACTED
+        ) {
+            null
+        } else {
+            permittedSummary
+        }
+
+        // Section 7.4: Pending or Blocked content must never appear in Breaking or Live
+        val safeBreaking = if (vStatus != VerificationStatus.VERIFIED ||
+            rStatus == RightsStatus.BLOCKED ||
+            eState == EditorialState.RETRACTED
+        ) {
+            false
+        } else {
+            isBreakingOrLive
+        }
+
         return ArticleRecord(
             id = id,
             title = title,
@@ -76,12 +107,15 @@ data class CachedArticleEntity(
             publishedAtIso = publishedAtIso,
             fetchedAtEpochMs = fetchedAtEpochMs,
             verifiedAtIso = verifiedAtIso,
-            verificationStatus = VerificationStatus.fromWire(verificationStatusWire),
-            rightsStatus = RightsStatus.fromWire(rightsStatusWire),
-            permittedSummary = if (RightsStatus.fromWire(rightsStatusWire) == RightsStatus.LINK_ONLY) null else permittedSummary,
+            verificationCheckedAtIso = verificationCheckedAtIso,
+            verificationReason = verificationReason,
+            verificationStatus = vStatus,
+            rightsStatus = rStatus,
+            editorialState = eState,
+            permittedSummary = safeSummary,
             corrections = parsedCorrections,
             expiryIso = expiryIso,
-            isBreakingOrLive = isBreakingOrLive,
+            isBreakingOrLive = safeBreaking,
             consolidatedSources = parsedSources
         )
     }
@@ -91,13 +125,22 @@ data class CachedArticleEntity(
             val serializedCorrections = record.corrections.joinToString("||") {
                 "${it.correctedAtIso}::${it.reason}"
             }
-            // Enforce Section 3.1: Do not cache unpermitted summaries for LINK_ONLY items
             val safeSummary = if (record.rightsStatus == RightsStatus.LINK_ONLY ||
-                record.rightsStatus == RightsStatus.BLOCKED
+                record.rightsStatus == RightsStatus.BLOCKED ||
+                record.verificationStatus == VerificationStatus.BLOCKED ||
+                record.editorialState == EditorialState.RETRACTED
             ) {
                 null
             } else {
                 record.permittedSummary
+            }
+            val safeBreaking = if (record.verificationStatus != VerificationStatus.VERIFIED ||
+                record.rightsStatus == RightsStatus.BLOCKED ||
+                record.editorialState == EditorialState.RETRACTED
+            ) {
+                false
+            } else {
+                record.isBreakingOrLive
             }
             return CachedArticleEntity(
                 id = record.id,
@@ -113,12 +156,15 @@ data class CachedArticleEntity(
                 publishedAtIso = record.publishedAtIso,
                 fetchedAtEpochMs = record.fetchedAtEpochMs,
                 verifiedAtIso = record.verifiedAtIso,
+                verificationCheckedAtIso = record.verificationCheckedAtIso,
+                verificationReason = record.verificationReason,
                 verificationStatusWire = record.verificationStatus.wireKey,
                 rightsStatusWire = record.rightsStatus.wireKey,
+                editorialStateWire = record.editorialState.wireKey,
                 permittedSummary = safeSummary,
                 correctionsPipeDelimited = serializedCorrections,
                 expiryIso = record.expiryIso,
-                isBreakingOrLive = record.isBreakingOrLive,
+                isBreakingOrLive = safeBreaking,
                 consolidatedSourcesCsv = record.consolidatedSources.joinToString(",")
             )
         }
@@ -138,16 +184,63 @@ data class BookmarkEntity(
     val canonicalSourceUrl: String,
     val publishedAtIso: String?,
     val savedAtEpochMs: Long,
+    val verificationStatusWire: String = VerificationStatus.VERIFIED.wireKey,
     val rightsStatusWire: String,
     val permittedSummary: String?
 )
+
+/**
+ * Local Feedback Draft Entity per Section 8.9:
+ * "If private storage or reviewer access is not ready, disable submit with an honest unavailable
+ * message and preserve only an optional local draft on the user device."
+ */
+@Entity(tableName = "feedback_drafts")
+data class FeedbackDraftEntity(
+    @PrimaryKey val feedbackId: String,
+    val idempotencyToken: String,
+    val articleId: String?,
+    val articleTitleSnapshot: String?,
+    val issueTypeWire: String,
+    val description: String,
+    val optionalComments: String?,
+    val optionalContact: String?,
+    val createdAtEpochMs: Long,
+    val reviewStatusWire: String = FeedbackReviewStatus.NEW.wireKey
+) {
+    fun toDomain(): FeedbackSubmissionPayload = FeedbackSubmissionPayload(
+        feedbackId = feedbackId,
+        idempotencyToken = idempotencyToken,
+        articleId = articleId,
+        articleTitleSnapshot = articleTitleSnapshot,
+        issueType = FeedbackIssueType.fromWire(issueTypeWire) ?: FeedbackIssueType.GENERAL,
+        description = description,
+        optionalComments = optionalComments,
+        optionalContact = optionalContact,
+        createdAtClientEpochMs = createdAtEpochMs
+    )
+
+    companion object {
+        fun fromDomain(payload: FeedbackSubmissionPayload): FeedbackDraftEntity = FeedbackDraftEntity(
+            feedbackId = payload.feedbackId,
+            idempotencyToken = payload.idempotencyToken,
+            articleId = payload.articleId,
+            articleTitleSnapshot = payload.articleTitleSnapshot,
+            issueTypeWire = payload.issueType.wireKey,
+            description = payload.description,
+            optionalComments = payload.optionalComments,
+            optionalContact = payload.optionalContact,
+            createdAtEpochMs = payload.createdAtClientEpochMs,
+            reviewStatusWire = payload.reviewStatus.wireKey
+        )
+    }
+}
 
 @Entity(tableName = "health_logs")
 data class HealthLogEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val timestampEpochMs: Long,
     val powerTier: String,
-    val eventType: String, // "SYNC_OK", "BACKOFF_RETRY", "CIRCUIT_OPEN", "SCHEMA_REJECT", "LOCATION_COARSE"
+    val eventType: String,
     val message: String
 )
 
@@ -178,6 +271,21 @@ interface NetraDao {
     @Query("DELETE FROM bookmarks")
     suspend fun clearAllBookmarks()
 
+    @Query("SELECT * FROM feedback_drafts ORDER BY createdAtEpochMs DESC")
+    fun observeFeedbackDrafts(): Flow<List<FeedbackDraftEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFeedbackDraft(draft: FeedbackDraftEntity)
+
+    @Query("UPDATE feedback_drafts SET optionalContact = NULL WHERE feedbackId = :feedbackId")
+    suspend fun removeContactFromDraft(feedbackId: String)
+
+    @Query("DELETE FROM feedback_drafts WHERE feedbackId = :feedbackId")
+    suspend fun deleteFeedbackDraftById(feedbackId: String)
+
+    @Query("DELETE FROM feedback_drafts")
+    suspend fun clearAllFeedbackDrafts()
+
     @Query("SELECT * FROM health_logs ORDER BY timestampEpochMs DESC LIMIT 100")
     fun observeBoundedHealthLogs(): Flow<List<HealthLogEntity>>
 
@@ -192,8 +300,13 @@ interface NetraDao {
 }
 
 @Database(
-    entities = [CachedArticleEntity::class, BookmarkEntity::class, HealthLogEntity::class],
-    version = 1,
+    entities = [
+        CachedArticleEntity::class,
+        BookmarkEntity::class,
+        FeedbackDraftEntity::class,
+        HealthLogEntity::class
+    ],
+    version = 2,
     exportSchema = false
 )
 abstract class NetraLocalDatabase : RoomDatabase() {

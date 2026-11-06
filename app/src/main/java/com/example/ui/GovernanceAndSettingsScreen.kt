@@ -20,11 +20,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.GpsFixed
-import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.RestartAlt
@@ -86,6 +86,7 @@ fun GovernanceAndSettingsScreen(
     onRequestCoarseLocation: () -> Unit,
     onResetSavedCity: () -> Unit,
     onClearHealthLogs: () -> Unit,
+    onOpenGeneralFeedback: () -> Unit = {},
     onNavigateBackHome: () -> Unit
 ) {
     BackHandler { onNavigateBackHome() }
@@ -139,6 +140,57 @@ fun GovernanceAndSettingsScreen(
             }
         }
 
+        // Quick action bar for General Feedback (Section 8.1) & Web Reference Repo Audit (12:28 IST)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isHi) {
+                                    "संदर्भ वेब रिपॉजिटरी (12:28 IST): ${GovernanceLedgerData.WEB_REFERENCE_REPO}"
+                                } else {
+                                    "Reference Web Repo (12:28 IST): ${GovernanceLedgerData.WEB_REFERENCE_REPO}"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = GovernanceLedgerData.SPEC_DATE_LABEL,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = onOpenGeneralFeedback,
+                            modifier = Modifier.testTag("settings_general_feedback_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.HelpOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isHi) "प्रतिक्रिया (Sec 8)" else "Feedback (Sec 8)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         when (selectedSection) {
             0 -> {
                 // Feature Matrix (Required / Implemented / Tested / Blocked + Power/Wakeup/Network cost)
@@ -150,9 +202,9 @@ fun GovernanceAndSettingsScreen(
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
                                 text = if (isHi) {
-                                    "धारा 7.3 फीचर व रिलीज़ गेट मैट्रिक्स (Required / Implemented / Tested / Blocked)"
+                                    "धारा 9.3 फीचर व रिलीज़ गेट मैट्रिक्स (Required / Implemented / Tested / Blocked)"
                                 } else {
-                                    "Section 7.3 Feature & Release Gate Matrix"
+                                    "Section 9.3 Feature & Release Gate Matrix"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 color = NetraAmberPrimary,

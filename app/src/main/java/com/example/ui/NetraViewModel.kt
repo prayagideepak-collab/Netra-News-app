@@ -8,12 +8,17 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.NetraRepository
 import com.example.data.local.BookmarkEntity
+import com.example.data.local.FeedbackDraftEntity
 import com.example.data.local.HealthLogEntity
 import com.example.domain.AppLanguage
 import com.example.domain.ArticleRecord
 import com.example.domain.EarthquakeEventRecord
 import com.example.domain.FeedEnvelope
 import com.example.domain.FeedLoadState
+import com.example.domain.FeedbackDeliveryResult
+import com.example.domain.FeedbackIssueType
+import com.example.domain.FeedbackSubmissionPayload
+import com.example.domain.FeedbackValidationOutcome
 import com.example.domain.NewsScope
 import com.example.domain.SourceHealthRecord
 import com.example.domain.ValidationAndRightsEngine
@@ -37,9 +42,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
 
 /**
- * Diagnostic mode allowing the owner/reviewer to inspect all required Section 6.5 Error Contract states
+ * Diagnostic mode allowing the owner/reviewer to inspect all required Section 9.5 Error Contract states
  * (Loaded, Empty, Stale, Offline, and Failed/Schema Rejection) on device without fabricating fake news.
  */
 enum class DiagnosticContractMode(val labelHi: String, val labelEn: String) {
@@ -61,6 +67,8 @@ data class NetraUiState(
     val locationBannerMessageEn: String? = null,
     val feedLoadState: FeedLoadState = FeedLoadState.Loading,
     val allVerifiedArticles: List<ArticleRecord> = emptyList(),
+    val warningStatusRecords: List<ArticleRecord> = emptyList(), // Pending & Blocked status records (Section 7.4)
+    val showWarningStatusRecordsOnHome: Boolean = true, // Allows inspecting Pending/Blocked warning cards on Home & Detail
     val retractedNotices: List<ArticleRecord> = emptyList(),
     val rejectedAuditEntries: List<Pair<ArticleRecord, String>> = emptyList(),
     val sourceHealthList: List<SourceHealthRecord> = emptyList(),
@@ -82,6 +90,12 @@ data class NetraUiState(
     val diagnosticMode: DiagnosticContractMode = DiagnosticContractMode.LIVE_NORMAL,
     val selectedArticleDetail: ArticleRecord? = null,
     val showCityPickerDialog: Boolean = false,
+    val showFeedbackModal: Boolean = false,
+    val feedbackPrefilledArticleId: String? = null,
+    val feedbackPrefilledArticleTitle: String? = null,
+    val feedbackInitialIssueType: FeedbackIssueType = FeedbackIssueType.GENERAL,
+    val feedbackStatusMessage: String? = null,
+    val feedbackStatusIsError: Boolean = false,
     val externalBrowserStatusBanner: String? = null,
     val isAppInForeground: Boolean = true
 )
@@ -97,10 +111,14 @@ class NetraViewModel(
     val bookmarksState: StateFlow<List<BookmarkEntity>> = repository.bookmarksFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val feedbackDraftsState: StateFlow<List<FeedbackDraftEntity>> = repository.feedbackDraftsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val healthLogsState: StateFlow<List<HealthLogEntity>> = repository.healthLogsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var networkCallsThisHour: Int = 0
+    private val recentFeedbackAttemptTimestamps = mutableListOf<Long>()
 
     init {
         val savedLang = repository.loadSavedLanguage()
@@ -124,10 +142,6 @@ class NetraViewModel(
         refreshAllFeeds(isUserInitiated = false)
     }
 
-    /**
-     * Foreground / Background lifecycle awareness (Section 3.2):
-     * "General news work is foreground-only: refresh while the reader uses the app and stop active polling when backgrounded."
-     */
     fun onForegroundLifecycleChanged(isForeground: Boolean) {
         _uiState.update { it.copy(isAppInForeground = isForeground) }
         if (isForeground) {
@@ -156,9 +170,12 @@ class NetraViewModel(
     }
 
     fun selectScope(scope: NewsScope) {
-        // World tab is Stage-6 Planned; selecting it shows the Stage-6 gate card cleanly
         _uiState.update { it.copy(selectedScope = scope) }
         recomputeScopedFeedState()
+    }
+
+    fun toggleShowWarningStatusRecordsOnHome() {
+        _uiState.update { it.copy(showWarningStatusRecordsOnHome = !it.showWarningStatusRecordsOnHome) }
     }
 
     fun setShowCityPickerDialog(show: Boolean) {
@@ -167,6 +184,124 @@ class NetraViewModel(
 
     fun openArticleDetail(article: ArticleRecord?) {
         _uiState.update { it.copy(selectedArticleDetail = article) }
+    }
+
+    /**
+     * Opens the Section 8 Feedback & Issue Report modal:
+     * - When called from an article card/detail, prefills articleId and sets INACCURACY by default.
+     * - When called from Footer / Settings / Help, leaves articleId null and sets GENERAL.
+     */
+    fun openFeedbackModal(article: ArticleRecord? = null) {
+        _uiState.update {
+            it.copy(
+                showFeedbackModal = true,
+                feedbackPrefilledArticleId = article?.id,
+                feedbackPrefilledArticleTitle = article?.title,
+                feedbackInitialIssueType = if (article != null) FeedbackIssueType.INACCURACY else FeedbackIssueType.GENERAL,
+                feedbackStatusMessage = null,
+                feedbackStatusIsError = false
+            )
+        }
+    }
+
+    fun closeFeedbackModal() {
+        _uiState.update {
+            it.copy(
+                showFeedbackModal = false,
+                feedbackStatusMessage = null,
+                feedbackStatusIsError = false
+            )
+        }
+    }
+
+    /**
+     * Validates and saves a local feedback draft per Section 8.4, 8.5, and 8.9.
+     */
+    fun validateAndSaveLocalFeedbackDraft(
+        articleId: String?,
+        articleTitle: String?,
+        issueType: FeedbackIssueType,
+        description: String,
+        optionalComments: String?,
+        optionalContact: String?
+    ) {
+        val nowMs = System.currentTimeMillis()
+        val isHi = _uiState.value.language == AppLanguage.HINDI
+        val rawPayload = FeedbackSubmissionPayload(
+            feedbackId = "fb-${UUID.randomUUID().toString().take(8)}",
+            idempotencyToken = "idem-${UUID.randomUUID()}",
+            articleId = articleId,
+            articleTitleSnapshot = articleTitle,
+            issueType = issueType,
+            description = description,
+            optionalComments = optionalComments,
+            optionalContact = optionalContact,
+            createdAtClientEpochMs = nowMs
+        )
+
+        val validation = ValidationAndRightsEngine.validateFeedbackSubmission(
+            rawPayload = rawPayload,
+            recentAttemptTimestampsMs = recentFeedbackAttemptTimestamps,
+            nowEpochMs = nowMs
+        )
+
+        when (validation) {
+            is FeedbackValidationOutcome.InvalidInput -> {
+                _uiState.update {
+                    it.copy(
+                        feedbackStatusMessage = if (isHi) validation.reasonHi else validation.reasonEn,
+                        feedbackStatusIsError = true
+                    )
+                }
+            }
+            is FeedbackValidationOutcome.SpamOrRateLimited -> {
+                _uiState.update {
+                    it.copy(
+                        feedbackStatusMessage = if (isHi) validation.reasonHi else validation.reasonEn,
+                        feedbackStatusIsError = true
+                    )
+                }
+            }
+            is FeedbackValidationOutcome.ValidReadyForSubmissionOrDraft -> {
+                recentFeedbackAttemptTimestamps.add(nowMs)
+                val delivery = ValidationAndRightsEngine.processFeedbackDelivery(
+                    validatedPayload = validation.sanitizedPayload,
+                    isPrivateEndpointConnected = false // Honest Stage-1 state: private Worker+D1 not yet connected
+                )
+                viewModelScope.launch {
+                    repository.saveLocalFeedbackDraft(validation.sanitizedPayload)
+                    val msg = when (delivery) {
+                        is FeedbackDeliveryResult.DisabledBackendSavedLocalDraftOnly -> {
+                            if (isHi) delivery.honestUnavailableMessageHi else delivery.honestUnavailableMessageEn
+                        }
+                        is FeedbackDeliveryResult.DurableServerReceipt -> {
+                            "Receipt: ${delivery.receiptId}"
+                        }
+                        is FeedbackDeliveryResult.NetworkOrServerFailure -> {
+                            if (isHi) delivery.errorMessageHi else delivery.errorMessageEn
+                        }
+                    }
+                    _uiState.update {
+                        it.copy(
+                            feedbackStatusMessage = msg,
+                            feedbackStatusIsError = false
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun removeContactFromDraft(feedbackId: String) {
+        viewModelScope.launch {
+            repository.removeContactFromFeedbackDraft(feedbackId)
+        }
+    }
+
+    fun deleteFeedbackDraft(feedbackId: String) {
+        viewModelScope.launch {
+            repository.deleteFeedbackDraft(feedbackId)
+        }
     }
 
     fun clearLocationBanner() {
@@ -179,14 +314,6 @@ class NetraViewModel(
         }
     }
 
-    fun clearBrowserStatusBanner() {
-        _uiState.update { it.copy(externalBrowserStatusBanner = null) }
-    }
-
-    /**
-     * Manual City Selection (Sections 1.5, 1.6, 6.4):
-     * Saves atomically, never prompts repeatedly when saved preference exists, and refreshes feed.
-     */
     fun selectCityManually(cityId: String) {
         val cityEntry = CityLocationEngine.findByCityId(cityId)
         val newPref = LocationPreference(
@@ -227,11 +354,6 @@ class NetraViewModel(
         refreshAllFeeds(isUserInitiated = true)
     }
 
-    /**
-     * Foreground Approximate City Detection (Sections 1.4, 1.5, 1.6):
-     * - Respects PowerTier (suspended in Critical/Survival <15% battery to save power).
-     * - Timeouts safely after 6s, scrubs raw coordinates immediately, and handles ambiguity.
-     */
     fun detectApproximateCityInForeground() {
         val telemetry = _uiState.value.powerTelemetry
         if (!telemetry.effectiveTier.allowCoarseLocationOnDemand) {
@@ -361,19 +483,14 @@ class NetraViewModel(
         }
     }
 
-    /**
-     * Opens canonical source URL in an external browser / Custom Tab intent (Section 3.6):
-     * - Rejects unsafe schemes (`javascript:`, `http:`, `file:`, `data:`) and unapproved hosts.
-     * - Never uses an internal privileged JavaScript WebView or JS bridge.
-     */
     fun openExternalSourceUrlSafely(context: Context, rawUrl: String) {
         if (!ValidationAndRightsEngine.isApprovedHttpsSourceUrl(rawUrl)) {
             _uiState.update {
                 it.copy(
                     externalBrowserStatusBanner = if (it.language == AppLanguage.HINDI) {
-                        "सुरक्षा अवरोध: केवल सत्यापित HTTPS प्रकाशक डोमेन अनुमत हैं ($rawUrl अस्वीकृत)।"
+                        "सुरक्षा अवरोध (धारा 3.6 / 7.4): असुरक्षित या गैर-अनुमत URL अवरुद्ध किया गया ($rawUrl)।"
                     } else {
-                        "Security Block: Only allowlisted HTTPS publisher URLs may be opened ($rawUrl rejected)."
+                        "Security Block (Sec 3.6 / 7.4): Unsafe or unapproved URL blocked ($rawUrl)."
                     }
                 )
             }
@@ -397,15 +514,11 @@ class NetraViewModel(
         }
     }
 
-    /**
-     * Refreshes feeds in foreground while respecting PowerTier budgets, circuit breaker backoff,
-     * and the Section 6.1–6.5 Shared Content & Error Contract.
-     */
     fun refreshAllFeeds(isUserInitiated: Boolean = true) {
         if (!_uiState.value.isAppInForeground && !isUserInitiated) return
 
         viewModelScope.launch {
-            val nowRefMs = 1793947200000L // Reference time aligned with 6 Nov 2026 spec window
+            val nowRefMs = 1793947200000L
             val wallNowMs = System.currentTimeMillis()
             val locPref = _uiState.value.locationPreference
             val diagMode = _uiState.value.diagnosticMode
@@ -420,11 +533,9 @@ class NetraViewModel(
             val isOffline = !currentTelemetry.isNetworkConnected ||
                 diagMode == DiagnosticContractMode.SIMULATE_OFFLINE
 
-            // Update civic weather & earthquake bulletins
             val weather = repository.getCivicWeatherBulletins(locPref, isOffline)
             val earthquakes = repository.getCivicEarthquakeBulletins(locPref, isOffline)
 
-            // 1. Handle Offline Mode (Section 6.5: preserve last successful content with its real timestamp)
             if (isOffline) {
                 val cached = repository.getCachedArticles()
                 val lastFetch = repository.loadLastSuccessfulFetchEpochMs()
@@ -450,7 +561,6 @@ class NetraViewModel(
                 return@launch
             }
 
-            // 2. Check PowerTier budget & Circuit Breaker
             val cb = _uiState.value.circuitBreaker
             if (cb.isOpen && wallNowMs < cb.nextAllowedAttemptEpochMs && !isUserInitiated) {
                 val cached = repository.getCachedArticles()
@@ -468,24 +578,21 @@ class NetraViewModel(
                 return@launch
             }
 
-            // Increment foreground network call counter when within budget
             if (networkCallsThisHour < currentTelemetry.effectiveTier.maxNetworkCallsPerHour || isUserInitiated) {
                 networkCallsThisHour += 1
             }
 
-            // 3. Construct envelope according to current mode
             val baseEnvelope = repository.buildVerifiedStage1Envelope(locPref, wallNowMs)
             val targetEnvelope: FeedEnvelope = when (diagMode) {
                 DiagnosticContractMode.LIVE_NORMAL -> baseEnvelope
                 DiagnosticContractMode.SIMULATE_EMPTY -> baseEnvelope.copy(items = emptyList())
                 DiagnosticContractMode.SIMULATE_STALE -> baseEnvelope.copy(
-                    generatedAtUtcIso = "2026-11-05T10:00:00Z" // >14 hours old relative to 2026-11-06T00:00:00Z
+                    generatedAtUtcIso = "2026-11-05T10:00:00Z"
                 )
                 DiagnosticContractMode.SIMULATE_OFFLINE -> baseEnvelope
                 DiagnosticContractMode.SIMULATE_SCHEMA_FAIL -> baseEnvelope.copy(schemaVersion = 99)
             }
 
-            // 4. Validate Envelope via Domain Engine
             val validation = ValidationAndRightsEngine.validateFeedEnvelope(
                 envelope = targetEnvelope,
                 referenceNowEpochMs = nowRefMs,
@@ -522,7 +629,6 @@ class NetraViewModel(
                 return@launch
             }
 
-            // Valid schema! Cache verified items in Room (batch write)
             if (validation.verifiedDisplayableItems.isNotEmpty()) {
                 repository.cacheVerifiedArticlesBatch(validation.verifiedDisplayableItems, wallNowMs)
             }
@@ -530,7 +636,7 @@ class NetraViewModel(
             repository.appendBoundedHealthLog(
                 currentTelemetry.effectiveTier,
                 "SYNC_OK",
-                "Validated ${validation.verifiedDisplayableItems.size} items, rejected ${validation.rejectedOrFilteredItems.size} items (incl. test-001)"
+                "Validated ${validation.verifiedDisplayableItems.size} verified, ${validation.warningStatusRecords.size} warning (Pending/Blocked), rejected ${validation.rejectedOrFilteredItems.size}"
             )
 
             _uiState.update {
@@ -538,6 +644,7 @@ class NetraViewModel(
                     powerTelemetry = currentTelemetry.copy(networkCallsInCurrentHour = networkCallsThisHour),
                     circuitBreaker = resetCb,
                     allVerifiedArticles = validation.verifiedDisplayableItems,
+                    warningStatusRecords = validation.warningStatusRecords,
                     retractedNotices = validation.retractedNoticeItems,
                     rejectedAuditEntries = validation.rejectedOrFilteredItems,
                     sourceHealthList = targetEnvelope.sourceHealth,
@@ -596,8 +703,8 @@ class NetraViewModel(
                     state.locationPreference.cityLabelEn
                 },
                 checkedAtEpochMs = fetchedAtMs,
-                reasonHi = "इस श्रेणी में वर्तमान में कोई सत्यापित समाचार आइटम नहीं है। अनुबंध 6.1 के अनुसार कोई काल्पनिक या नकली पूरक सामग्री (filler) नहीं जोड़ी जाती।",
-                reasonEn = "No verified news items currently available for this scope. Per Section 6.1, empty items mean no verified content — never invented filler."
+                reasonHi = "इस श्रेणी में वर्तमान में कोई सत्यापित समाचार आइटम नहीं है। अनुबंध 9.1 के अनुसार कोई काल्पनिक या नकली पूरक सामग्री (filler) नहीं जोड़ी जाती।",
+                reasonEn = "No verified news items currently available for this scope. Per Section 9.1, empty items mean no verified content — never invented filler."
             )
 
             isStaleEnvelope -> FeedLoadState.Stale(
@@ -618,10 +725,6 @@ class NetraViewModel(
         _uiState.update { it.copy(feedLoadState = newFeedState) }
     }
 
-    /**
-     * Implements Confirmed Product Direction (Section 0.2):
-     * "First release is Local + State, with National fallback only from verified sources."
-     */
     private fun filterByScopeWithNationalFallback(
         items: List<ArticleRecord>,
         scope: NewsScope

@@ -50,6 +50,7 @@ import com.example.location.CityLocationEngine
 import com.example.power.PowerTier
 import com.example.ui.AmbiguousCityConfirmationDialog
 import com.example.ui.ArticleDetailProvenanceSheet
+import com.example.ui.FeedbackReportModalSheet
 import com.example.ui.GovernanceAndSettingsScreen
 import com.example.ui.ManualCityPickerDialog
 import com.example.ui.NetraFamilyHeader
@@ -91,9 +92,9 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val uiState by netraViewModel.uiState.collectAsStateWithLifecycle()
     val bookmarks by netraViewModel.bookmarksState.collectAsStateWithLifecycle()
+    val feedbackDrafts by netraViewModel.feedbackDraftsState.collectAsStateWithLifecycle()
     val healthLogs by netraViewModel.healthLogsState.collectAsStateWithLifecycle()
 
-    // Lifecycle awareness (Section 3.2): stop background work when not visible
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -112,16 +113,10 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
         }
     }
 
-    // Runtime permission launcher for ACCESS_COARSE_LOCATION (requested ONLY when user taps Auto City)
     val coarsePermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            netraViewModel.detectApproximateCityInForeground()
-        } else {
-            // Permission denied -> trigger safe fallback banner & keep manual city active
-            netraViewModel.detectApproximateCityInForeground()
-        }
+    ) { _ ->
+        netraViewModel.detectApproximateCityInForeground()
     }
 
     val requestCoarseCityAction = {
@@ -253,12 +248,15 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
                     onOpenCityPicker = { netraViewModel.setShowCityPickerDialog(true) },
                     onRequestCoarseLocation = requestCoarseCityAction,
                     onOpenArticleDetail = { netraViewModel.openArticleDetail(it) },
+                    onReportArticleIssue = { netraViewModel.openFeedbackModal(it) },
+                    onOpenGeneralFeedback = { netraViewModel.openFeedbackModal(null) },
                     onToggleBookmark = { netraViewModel.toggleBookmark(it) },
                     onOpenExternalUrl = { url ->
                         netraViewModel.openExternalSourceUrlSafely(context, url)
                     },
                     onRefresh = { netraViewModel.refreshAllFeeds(isUserInitiated = true) },
                     onSelectDiagnosticMode = { netraViewModel.setDiagnosticContractMode(it) },
+                    onToggleWarningRecordsOnHome = { netraViewModel.toggleShowWarningStatusRecordsOnHome() },
                     onDismissLocationBanner = { netraViewModel.clearLocationBanner() }
                 )
 
@@ -288,6 +286,7 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
                     onRequestCoarseLocation = requestCoarseCityAction,
                     onResetSavedCity = { netraViewModel.resetSavedCityPreference() },
                     onClearHealthLogs = { netraViewModel.clearHealthLogs() },
+                    onOpenGeneralFeedback = { netraViewModel.openFeedbackModal(null) },
                     onNavigateBackHome = { currentBottomTab = 0 }
                 )
             }
@@ -300,9 +299,39 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
                 article = detailArticle,
                 isHi = isHi,
                 onDismiss = { netraViewModel.openArticleDetail(null) },
+                onReportIssue = {
+                    netraViewModel.openArticleDetail(null)
+                    netraViewModel.openFeedbackModal(detailArticle)
+                },
                 onOpenExternalUrl = { url ->
                     netraViewModel.openExternalSourceUrlSafely(context, url)
                 }
+            )
+        }
+
+        // Section 8 Feedback & Issue Report Modal Sheet
+        if (uiState.showFeedbackModal) {
+            FeedbackReportModalSheet(
+                prefilledArticleId = uiState.feedbackPrefilledArticleId,
+                prefilledArticleTitle = uiState.feedbackPrefilledArticleTitle,
+                initialIssueType = uiState.feedbackInitialIssueType,
+                feedbackBannerMessage = uiState.feedbackStatusMessage,
+                feedbackBannerIsError = uiState.feedbackStatusIsError,
+                savedDrafts = feedbackDrafts,
+                isHi = isHi,
+                onDismiss = { netraViewModel.closeFeedbackModal() },
+                onSaveLocalDraft = { artId, artTitle, type, desc, comments, contact ->
+                    netraViewModel.validateAndSaveLocalFeedbackDraft(
+                        articleId = artId,
+                        articleTitle = artTitle,
+                        issueType = type,
+                        description = desc,
+                        optionalComments = comments,
+                        optionalContact = contact
+                    )
+                },
+                onRemoveContactFromDraft = { netraViewModel.removeContactFromDraft(it) },
+                onDeleteDraft = { netraViewModel.deleteFeedbackDraft(it) }
             )
         }
 
@@ -316,7 +345,7 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
             )
         }
 
-        // Nearest-City Ambiguity Confirmation Dialog (Section 6.4)
+        // Nearest-City Ambiguity Confirmation Dialog (Section 9.4)
         val ambiguous = uiState.ambiguousCityPrompt
         if (ambiguous != null) {
             AmbiguousCityConfirmationDialog(

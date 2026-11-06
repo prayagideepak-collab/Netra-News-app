@@ -1,7 +1,8 @@
 package com.example.domain
 
 /**
- * Shared Content, Evidence & Rights Contract for Netra News (Stage 1 Specification, 6 Nov 2026).
+ * Shared Content, Evidence, Verification Indicators & Feedback Contract
+ * for Netra News (Build Specification v3, 6 Nov 2026).
  * Unknown fields remain null, never invented.
  */
 
@@ -57,14 +58,51 @@ enum class NewsScope(
     }
 }
 
-enum class VerificationStatus(val wireKey: String, val labelHi: String, val labelEn: String) {
-    VERIFIED("verified", "सत्यापित स्रोत", "Verified Source"),
-    PENDING("pending", "असत्यापित / लंबित", "Pending Verification"),
-    RETRACTED("retracted", "वापस लिया गया (Retracted)", "Retracted");
+/**
+ * Source Verification Status per Section 7 (Owner Addition, 6 Nov) & Section 9.2:
+ * Allowed values: verified, pending, blocked.
+ * Map to visible labels Verified, Pending, Blocked.
+ * Missing, unknown, or malformed status MUST fall back to PENDING, never VERIFIED.
+ */
+enum class VerificationStatus(
+    val wireKey: String,
+    val labelEn: String,
+    val labelHi: String,
+    val monochromeSymbol: String
+) {
+    VERIFIED("verified", "Verified", "सत्यापित (Verified)", "[✓ VERIFIED]"),
+    PENDING("pending", "Pending", "लंबित (Pending)", "[! PENDING]"),
+    BLOCKED("blocked", "Blocked", "अवरुद्ध (Blocked)", "[✕ BLOCKED]");
 
     companion object {
-        fun fromWire(value: String?): VerificationStatus =
-            entries.firstOrNull { it.wireKey.equals(value?.trim(), ignoreCase = true) } ?: PENDING
+        fun fromWire(value: String?): VerificationStatus {
+            if (value.isNullOrBlank()) return PENDING
+            return when (value.trim().lowercase()) {
+                "verified" -> VERIFIED
+                "pending" -> PENDING
+                "blocked" -> BLOCKED
+                else -> PENDING // Section 7.5: Missing, unknown or malformed falls back to Pending, not Verified
+            }
+        }
+    }
+}
+
+/**
+ * Separate Editorial State per Section 7.5 & 9.2:
+ * "Retraction remains a separate editorialState plus correction record."
+ */
+enum class EditorialState(
+    val wireKey: String,
+    val labelEn: String,
+    val labelHi: String
+) {
+    ACTIVE("active", "Active", "सक्रिय"),
+    CORRECTED("corrected", "Corrected", "संशोधित (Corrected)"),
+    RETRACTED("retracted", "Retracted", "वापस लिया गया (Retracted)");
+
+    companion object {
+        fun fromWire(value: String?): EditorialState =
+            entries.firstOrNull { it.wireKey.equals(value?.trim(), ignoreCase = true) } ?: ACTIVE
     }
 }
 
@@ -101,8 +139,16 @@ data class CorrectionEntry(
     val reason: String
 )
 
+data class VerificationTransitionRecord(
+    val fromStatus: VerificationStatus,
+    val toStatus: VerificationStatus,
+    val reviewedAtIso: String,
+    val reviewerRole: String,
+    val reason: String
+)
+
 /**
- * Shared Article Record per Section 2.1 & 6.2:
+ * Shared Article Record per Section 2.1, 7.1-7.5, and 9.2:
  * Unknown fields remain null, never invented.
  */
 data class ArticleRecord(
@@ -119,10 +165,14 @@ data class ArticleRecord(
     val publishedAtIso: String?, // With timezone, null if missing
     val fetchedAtEpochMs: Long,
     val verifiedAtIso: String?,
+    val verificationCheckedAtIso: String? = verifiedAtIso,
+    val verificationReason: String? = null,
     val verificationStatus: VerificationStatus,
     val rightsStatus: RightsStatus,
-    val permittedSummary: String?, // Only rendered if rightsStatus is LICENSED or ORIGINAL
+    val editorialState: EditorialState = EditorialState.ACTIVE,
+    val permittedSummary: String?, // Only rendered if rightsStatus is LICENSED or ORIGINAL and not BLOCKED
     val corrections: List<CorrectionEntry> = emptyList(),
+    val statusTransitions: List<VerificationTransitionRecord> = emptyList(),
     val expiryIso: String? = null,
     val licensedImageUrl: String? = null,
     val licensedImageCredit: String? = null,
@@ -140,7 +190,7 @@ data class SourceHealthRecord(
 )
 
 /**
- * Feed Envelope per Section 6.1:
+ * Feed Envelope per Section 9.1:
  * schemaVersion=1, generatedAt as UTC ISO timestamp, coverage list,
  * items array, sourceHealth array and optional nextCursor.
  */
@@ -154,7 +204,7 @@ data class FeedEnvelope(
 )
 
 /**
- * Distinct Error & Load Contract per Section 6.5:
+ * Distinct Error & Load Contract per Section 9.5:
  * loading, loaded, empty, stale, offline and failed are separate states.
  * Preserve last successful content with its real timestamp.
  */
@@ -200,7 +250,6 @@ sealed class FeedLoadState {
 
 /**
  * Allowlist Source Entry per Section 2.2:
- * Verified identity, feed URL, coverage, update cadence, terms and licence.
  */
 data class SourceAllowlistEntry(
     val sourceId: String,
@@ -218,8 +267,6 @@ data class SourceAllowlistEntry(
 
 /**
  * Weather & Earthquake civic bulletin records per Section 2.6 & 3.4:
- * Must carry source-issued event time, area, units, severity, update/expiry and link.
- * Unavailable/stale must look different from a real zero or all-clear.
  */
 enum class BulletinDataStatus {
     LIVE_VERIFIED,
@@ -236,7 +283,7 @@ data class WeatherAdvisoryRecord(
     val stateCode: String,
     val cityId: String?,
     val status: BulletinDataStatus,
-    val temperatureCelsius: Double?, // Null when unavailable (never fake 0°C!)
+    val temperatureCelsius: Double?,
     val rainfallMm: Double?,
     val humidityPercent: Int?,
     val windKmph: Double?,
@@ -257,7 +304,7 @@ data class EarthquakeEventRecord(
     val areaLabelHi: String,
     val areaLabelEn: String,
     val status: BulletinDataStatus,
-    val magnitudeMw: Double?, // Null when unavailable or no event
+    val magnitudeMw: Double?,
     val depthKm: Double?,
     val latitudeApprox: Double?,
     val longitudeApprox: Double?,
@@ -271,8 +318,97 @@ data class EarthquakeEventRecord(
 )
 
 /**
- * Feature Matrix Row per Section 7.3 & Additional User Instructions (Feature Gate):
- * Required / Implemented / Tested / Blocked columns + Power Tier / Wakeup / Network Cost.
+ * Feedback, Private Review & Minimal Data Models per Section 8 (Owner Addition, v2 & v3):
+ * - Form fields: articleId optional and prefilled for article reports;
+ *   issueType=inaccuracy/brokenLink/outdated/other/general;
+ *   description required (20-2000 chars); optional comments; contact optional.
+ * - Allow feedback without an account or contact.
+ * - If private storage or reviewer access is not ready, disable submit with an honest unavailable
+ *   message and preserve only an optional local draft on the user device.
+ */
+enum class FeedbackIssueType(
+    val wireKey: String,
+    val labelHi: String,
+    val labelEn: String
+) {
+    INACCURACY("inaccuracy", "तथ्यात्मक त्रुटि (Inaccuracy)", "Factual Inaccuracy"),
+    BROKEN_LINK("brokenLink", "टूटा हुआ लिंक (Broken Link)", "Broken Source Link"),
+    OUTDATED("outdated", "पुरानी सूचना (Outdated Info)", "Outdated Information"),
+    OTHER("other", "अन्य लेख समस्या (Other Article Issue)", "Other Article Issue"),
+    GENERAL("general", "सामान्य प्रतिक्रिया (General Feedback)", "General App Feedback");
+
+    companion object {
+        fun fromWire(value: String?): FeedbackIssueType? =
+            entries.firstOrNull { it.wireKey.equals(value?.trim(), ignoreCase = true) }
+    }
+}
+
+enum class FeedbackReviewStatus(
+    val wireKey: String,
+    val labelHi: String,
+    val labelEn: String
+) {
+    NEW("new", "नया (New)", "New"),
+    IN_REVIEW("inReview", "समीक्षाधीन (In Review)", "In Review"),
+    RESOLVED("resolved", "समाधान किया गया (Resolved)", "Resolved"),
+    REJECTED("rejected", "अस्वीकृत (Rejected)", "Rejected")
+}
+
+data class FeedbackSubmissionPayload(
+    val feedbackId: String,
+    val idempotencyToken: String,
+    val articleId: String?,
+    val articleTitleSnapshot: String?,
+    val issueType: FeedbackIssueType,
+    val description: String,
+    val optionalComments: String?,
+    val optionalContact: String?,
+    val honeypotField: String = "",
+    val createdAtClientEpochMs: Long,
+    val createdAtServerIso: String? = null,
+    val reviewStatus: FeedbackReviewStatus = FeedbackReviewStatus.NEW,
+    val reviewerNote: String? = null,
+    val resolvedAtIso: String? = null
+)
+
+sealed class FeedbackValidationOutcome {
+    data class ValidReadyForSubmissionOrDraft(
+        val sanitizedPayload: FeedbackSubmissionPayload
+    ) : FeedbackValidationOutcome()
+
+    data class InvalidInput(
+        val reasonHi: String,
+        val reasonEn: String
+    ) : FeedbackValidationOutcome()
+
+    data class SpamOrRateLimited(
+        val reasonHi: String,
+        val reasonEn: String
+    ) : FeedbackValidationOutcome()
+}
+
+sealed class FeedbackDeliveryResult {
+    data class DurableServerReceipt(
+        val receiptId: String,
+        val serverTimestampIso: String,
+        val deduplicatedRetry: Boolean
+    ) : FeedbackDeliveryResult()
+
+    data class DisabledBackendSavedLocalDraftOnly(
+        val localDraftId: String,
+        val honestUnavailableMessageHi: String,
+        val honestUnavailableMessageEn: String
+    ) : FeedbackDeliveryResult()
+
+    data class NetworkOrServerFailure(
+        val errorMessageHi: String,
+        val errorMessageEn: String,
+        val canRetryWithSameIdempotencyToken: Boolean = true
+    ) : FeedbackDeliveryResult()
+}
+
+/**
+ * Feature Matrix Row per Section 10.3 & Power Gate:
  */
 enum class FeatureGateStatus(val labelHi: String, val labelEn: String) {
     IMPLEMENTED("कार्यान्वित (Implemented)", "Implemented"),

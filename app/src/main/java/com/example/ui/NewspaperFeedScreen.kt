@@ -24,13 +24,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Feedback
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationCity
@@ -64,23 +68,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.AppLanguage
 import com.example.domain.ArticleRecord
+import com.example.domain.EditorialState
 import com.example.domain.FeedLoadState
 import com.example.domain.NewsScope
 import com.example.domain.RightsStatus
-import com.example.location.CitySelectionMode
+import com.example.domain.ValidationAndRightsEngine
+import com.example.domain.VerificationStatus
 import com.example.ui.theme.BreakingCrimson
 import com.example.ui.theme.BreakingCrimsonBg
 import com.example.ui.theme.NetraAmberDeep
@@ -95,7 +101,7 @@ import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldBg
 
 /**
- * Netra Family Masthead & Newspaper Feed Screen (Sections 1.2, 1.3, 2, 3, 6).
+ * Netra Family Masthead & Newspaper Feed Screen (Build Specification v3, Sections 1.2, 2, 3, 7, 8, 9).
  */
 @Composable
 fun NetraFamilyHeader(
@@ -113,7 +119,6 @@ fun NetraFamilyHeader(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Top subtle banner artwork strip
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -147,9 +152,9 @@ fun NetraFamilyHeader(
                 ) {
                     Text(
                         text = if (isHi) {
-                            "नेत्र इकोसिस्टम • सत्यापित स्रोत समाचार पत्र"
+                            "नेत्र इकोसिस्टम • सत्यापित स्रोत समाचार पत्र (Spec v3)"
                         } else {
-                            "NETRA ECOSYSTEM • VERIFIED SOURCE NEWSPAPER"
+                            "NETRA ECOSYSTEM • VERIFIED SOURCE NEWSPAPER (Spec v3)"
                         },
                         style = MaterialTheme.typography.labelMedium,
                         color = NetraAmberPrimary,
@@ -169,7 +174,6 @@ fun NetraFamilyHeader(
                 }
             }
 
-            // Main Masthead Row: App Name, Version, Date/Time, Language Toggle, Refresh
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -192,7 +196,7 @@ fun NetraFamilyHeader(
                             shape = RoundedCornerShape(4.dp)
                         ) {
                             Text(
-                                text = "v1.0.0-stage1",
+                                text = "v1.0.0-v3",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = NetraAmberPrimary,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -202,9 +206,9 @@ fun NetraFamilyHeader(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (isHi) {
-                            "शुक्रवार, 6 नवंबर 2026 • IST | कोई विज्ञापन नहीं • केवल सत्यापित स्रोत लिंक"
+                            "6 नवंबर 2026 • IST | कोई विज्ञापन नहीं • स्रोत सत्यापन संकेतक सक्रिय"
                         } else {
-                            "Fri, 6 Nov 2026 • IST | Zero Ads in Live/Breaking • Verified Link-Out"
+                            "6 Nov 2026 • IST | Zero Ads in Live/Breaking • Verification Indicators"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = NewsprintIvory.copy(alpha = 0.8f)
@@ -244,12 +248,72 @@ fun NetraFamilyHeader(
                 }
             }
 
-            // Gold Amber Broadsheet Divider Rule
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(3.dp)
                     .background(NetraAmberPrimary)
+            )
+        }
+    }
+}
+
+/**
+ * Reusable Monochrome & Screen-Reader Accessible Source Verification Indicator Badge (Section 7.1–7.4).
+ * Allowed values: Verified, Pending, Blocked.
+ * Includes icon + explicit text label + distinct border style so meaning never relies on colour alone.
+ */
+@Composable
+fun SourceVerificationStatusBadge(
+    status: VerificationStatus,
+    isHi: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val bgColor = when (status) {
+        VerificationStatus.VERIFIED -> VerifiedEmeraldBg
+        VerificationStatus.PENDING -> StaleAmberBg
+        VerificationStatus.BLOCKED -> BreakingCrimsonBg
+    }
+    val fgColor = when (status) {
+        VerificationStatus.VERIFIED -> VerifiedEmerald
+        VerificationStatus.PENDING -> StaleAmber
+        VerificationStatus.BLOCKED -> BreakingCrimson
+    }
+    val icon = when (status) {
+        VerificationStatus.VERIFIED -> Icons.Default.CheckCircle
+        VerificationStatus.PENDING -> Icons.Default.HourglassEmpty
+        VerificationStatus.BLOCKED -> Icons.Default.Block
+    }
+    val textLabel = if (isHi) {
+        "स्रोत सत्यापन (Source verification): ${status.labelHi}"
+    } else {
+        "Source verification: ${status.labelEn}"
+    }
+
+    Surface(
+        color = bgColor,
+        shape = RoundedCornerShape(4.dp),
+        border = BorderStroke(1.5.dp, fgColor),
+        modifier = modifier.semantics {
+            contentDescription = textLabel
+        }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = fgColor,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "${status.monochromeSymbol} $textLabel",
+                style = MaterialTheme.typography.labelSmall,
+                color = fgColor,
+                fontWeight = FontWeight.Bold
             )
         }
     }
@@ -263,10 +327,13 @@ fun NewspaperFeedScreen(
     onOpenCityPicker: () -> Unit,
     onRequestCoarseLocation: () -> Unit,
     onOpenArticleDetail: (ArticleRecord) -> Unit,
+    onReportArticleIssue: (ArticleRecord) -> Unit,
+    onOpenGeneralFeedback: () -> Unit,
     onToggleBookmark: (ArticleRecord) -> Unit,
     onOpenExternalUrl: (String) -> Unit,
     onRefresh: () -> Unit,
     onSelectDiagnosticMode: (DiagnosticContractMode) -> Unit,
+    onToggleWarningRecordsOnHome: () -> Unit,
     onDismissLocationBanner: () -> Unit
 ) {
     val isHi = uiState.language == AppLanguage.HINDI
@@ -297,7 +364,7 @@ fun NewspaperFeedScreen(
             )
         }
 
-        // 3. Owner Acceptance Contract State Switcher (Compact verification strip)
+        // 3. Owner Acceptance Contract State Switcher
         item {
             DiagnosticContractStrip(
                 currentMode = uiState.diagnosticMode,
@@ -326,7 +393,7 @@ fun NewspaperFeedScreen(
             }
         }
 
-        // 5. Distinct Error & Load Contract States (Section 6.5: Loading, Loaded, Empty, Stale, Offline, Failed)
+        // 5. Distinct Error & Load Contract States (Section 9.5)
         when (val feedState = uiState.feedLoadState) {
             is FeedLoadState.Loading -> {
                 item {
@@ -341,9 +408,9 @@ fun NewspaperFeedScreen(
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = if (isHi) {
-                                    "सत्यापित स्रोत और अधिकार अनुबंध की जांच हो रही है..."
+                                    "सत्यापित स्रोत, सत्यापन संकेतक और अधिकार अनुबंध की जांच हो रही है..."
                                 } else {
-                                    "Verifying source allowlist, schema v1 & rights contract..."
+                                    "Verifying source allowlist, verificationStatus & rights contract..."
                                 },
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -379,6 +446,7 @@ fun NewspaperFeedScreen(
                         isSaved = savedArticleIds.contains(article.id),
                         isHi = isHi,
                         onOpenDetail = { onOpenArticleDetail(article) },
+                        onReportIssue = { onReportArticleIssue(article) },
                         onToggleBookmark = { onToggleBookmark(article) },
                         onOpenExternalUrl = { onOpenExternalUrl(article.canonicalSourceUrl) }
                     )
@@ -402,6 +470,7 @@ fun NewspaperFeedScreen(
                         isSaved = savedArticleIds.contains(article.id),
                         isHi = isHi,
                         onOpenDetail = { onOpenArticleDetail(article) },
+                        onReportIssue = { onReportArticleIssue(article) },
                         onToggleBookmark = { onToggleBookmark(article) },
                         onOpenExternalUrl = { onOpenExternalUrl(article.canonicalSourceUrl) }
                     )
@@ -441,6 +510,7 @@ fun NewspaperFeedScreen(
                             isSaved = savedArticleIds.contains(article.id),
                             isHi = isHi,
                             onOpenDetail = { onOpenArticleDetail(article) },
+                            onReportIssue = { onReportArticleIssue(article) },
                             onToggleBookmark = { onToggleBookmark(article) },
                             onOpenExternalUrl = { onOpenExternalUrl(article.canonicalSourceUrl) }
                         )
@@ -471,6 +541,7 @@ fun NewspaperFeedScreen(
                         isSaved = savedArticleIds.contains(article.id),
                         isHi = isHi,
                         onOpenDetail = { onOpenArticleDetail(article) },
+                        onReportIssue = { onReportArticleIssue(article) },
                         onToggleBookmark = { onToggleBookmark(article) },
                         onOpenExternalUrl = { onOpenExternalUrl(article.canonicalSourceUrl) }
                     )
@@ -478,13 +549,117 @@ fun NewspaperFeedScreen(
             }
         }
 
-        // 6. Transparency & Rights Guard Drawer (Retracted notices + Blocked test-001 proof)
+        // 6. Section 7.4 Pending & Blocked Status/Warning Records Section (Distinct from ordinary verified stories)
+        if (uiState.warningStatusRecords.isNotEmpty()) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (isHi) {
+                                "धारा 7.4: स्रोत स्थिति/चेतावनी रिकॉर्ड (Pending & Blocked — सामान्य समाचार नहीं)"
+                            } else {
+                                "Section 7.4: Source Status/Warning Records (Pending & Blocked)"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onToggleWarningRecordsOnHome) {
+                            Text(
+                                if (uiState.showWarningStatusRecordsOnHome) {
+                                    if (isHi) "छुपाएं" else "Hide"
+                                } else {
+                                    if (isHi) "दिखाएं (${uiState.warningStatusRecords.size})" else "Show (${uiState.warningStatusRecords.size})"
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (uiState.showWarningStatusRecordsOnHome) {
+                items(uiState.warningStatusRecords, key = { it.id }) { warningItem ->
+                    BroadsheetArticleCard(
+                        article = warningItem,
+                        isSaved = savedArticleIds.contains(warningItem.id),
+                        isHi = isHi,
+                        onOpenDetail = { onOpenArticleDetail(warningItem) },
+                        onReportIssue = { onReportArticleIssue(warningItem) },
+                        onToggleBookmark = { onToggleBookmark(warningItem) },
+                        onOpenExternalUrl = { onOpenExternalUrl(warningItem.canonicalSourceUrl) }
+                    )
+                }
+            }
+        }
+
+        // 7. Transparency & Rights Guard Drawer (Retracted editorialState + Blocked test-001 proof)
         item {
             TransparencyAuditFooterCard(
                 uiState = uiState,
                 isExpanded = showAuditDrawer,
                 onToggleExpand = { showAuditDrawer = !showAuditDrawer }
             )
+        }
+
+        // 8. Section 8.1 Newspaper Footer General Feedback Affordance
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isHi) {
+                                "प्रतिक्रिया एवं सुधार (धारा 8 • बिना खाते के)"
+                            } else {
+                                "Feedback & Corrections (Sec 8 • No Account Needed)"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (isHi) {
+                                "किसी लेख या ऐप के बारे में सामान्य प्रतिक्रिया भेजें या स्थानीय ड्राफ्ट सहेजें।"
+                            } else {
+                                "Submit general feedback or manage local drafts with minimal data."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = onOpenGeneralFeedback,
+                        modifier = Modifier.testTag("footer_general_feedback_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Feedback,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (isHi) "प्रतिक्रिया" else "Feedback")
+                    }
+                }
+            }
         }
     }
 }
@@ -578,7 +753,6 @@ private fun CityAndPolicyControlStrip(
             }
         }
 
-        // No-Ads During Breaking/Live Policy Pill
         Spacer(modifier = Modifier.height(6.dp))
         Surface(
             color = NetraAmberMuted,
@@ -599,9 +773,9 @@ private fun CityAndPolicyControlStrip(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = if (isHi) {
-                        "ब्रेकिंग/लाइव समाचार में शून्य विज्ञापन • सभी आइटम पर मूल प्रकाशक का नाम अनिवार्य"
+                        "ब्रेकिंग/लाइव में शून्य विज्ञापन • स्रोत सत्यापन स्थिति केवल स्रोत रिकॉर्ड दर्शाती है, प्रत्येक तथ्य की गारंटी नहीं"
                     } else {
-                        "Zero Ads in Breaking/Live News • Publisher Named on Every Item • Free Tier"
+                        "Zero Ads in Breaking/Live • Source verification shows recorded source status, not a guarantee of every fact"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = NetraNavyDeep,
@@ -610,7 +784,6 @@ private fun CityAndPolicyControlStrip(
             }
         }
 
-        // Location feedback banner if present
         if (uiState.locationBannerMessageHi != null || uiState.locationBannerMessageEn != null) {
             Spacer(modifier = Modifier.height(6.dp))
             Surface(
@@ -696,9 +869,9 @@ private fun DiagnosticContractStrip(
     ) {
         Text(
             text = if (isHi) {
-                "अनुबंध 6.5 स्थिति निरीक्षक (Contract State Verifier):"
+                "अनुबंध 9.5 स्थिति निरीक्षक (Contract State Verifier):"
             } else {
-                "Section 6.5 Error Contract State Verifier:"
+                "Section 9.5 Error Contract State Verifier:"
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -730,31 +903,93 @@ private fun DiagnosticContractStrip(
     }
 }
 
+/**
+ * Broadsheet Article Card (Updated for Build Specification v3, Sections 2, 7, 8):
+ * - Section 7.2 & 7.3: Shows `Source: [publisher]` next to `Source verification: [Verified/Pending/Blocked]`
+ *   beside the publisher and BEFORE the timestamp.
+ * - Section 7.4: If `Pending` or `Blocked` is shown, renders as a distinct warning/status record
+ *   (never in Breaking/Live; `Blocked` has no scraped body/media or clickable unsafe URL).
+ * - Section 8.1: Includes "Report article issue" button prefilling `articleId`.
+ */
 @Composable
 fun BroadsheetArticleCard(
     article: ArticleRecord,
     isSaved: Boolean,
     isHi: Boolean,
     onOpenDetail: () -> Unit,
+    onReportIssue: () -> Unit,
     onToggleBookmark: () -> Unit,
     onOpenExternalUrl: () -> Unit
 ) {
     val permittedSummary = remember(article) {
-        com.example.domain.ValidationAndRightsEngine.getRightsPermittedSummary(article)
+        ValidationAndRightsEngine.getRightsPermittedSummary(article)
+    }
+    val isWarningRecord = article.verificationStatus != VerificationStatus.VERIFIED ||
+        article.rightsStatus == RightsStatus.BLOCKED
+    val isLinkClickable = remember(article) {
+        ValidationAndRightsEngine.isClickableSourceLinkAllowed(article)
+    }
+    val srAnnouncement = remember(article, isHi) {
+        ValidationAndRightsEngine.formatScreenReaderVerificationAnnouncement(article, isHi)
     }
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        colors = CardDefaults.cardColors(
+            containerColor = when (article.verificationStatus) {
+                VerificationStatus.VERIFIED -> MaterialTheme.colorScheme.surface
+                VerificationStatus.PENDING -> StaleAmberBg.copy(alpha = 0.28f)
+                VerificationStatus.BLOCKED -> BreakingCrimsonBg.copy(alpha = 0.25f)
+            }
+        ),
+        border = BorderStroke(
+            width = if (isWarningRecord) 1.5.dp else 1.dp,
+            color = when (article.verificationStatus) {
+                VerificationStatus.VERIFIED -> MaterialTheme.colorScheme.outline
+                VerificationStatus.PENDING -> StaleAmber
+                VerificationStatus.BLOCKED -> BreakingCrimson
+            }
+        ),
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clickable { onOpenDetail() }
+            .semantics { contentDescription = srAnnouncement }
             .testTag("article_card_${article.id}")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Top Meta Row: Breaking Badge / Scope / Category / Original Language Tag
+            // Warning Record Header Banner if Pending or Blocked (Section 7.4)
+            if (isWarningRecord) {
+                Surface(
+                    color = if (article.verificationStatus == VerificationStatus.BLOCKED) BreakingCrimsonBg else StaleAmberBg,
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Text(
+                        text = if (article.verificationStatus == VerificationStatus.BLOCKED) {
+                            if (isHi) {
+                                "चेतावनी रिकॉर्ड (Blocked Status Record): यह सामान्य सत्यापित समाचार नहीं है। असुरक्षित लिंक व पाठ रोका गया है।"
+                            } else {
+                                "Warning Status Record (Blocked): Not a verified news story. Unsafe link & scraped prose withheld."
+                            }
+                        } else {
+                            if (isHi) {
+                                "चेतावनी रिकॉर्ड (Pending Status Record): स्रोत सत्यापन लंबित है; ब्रेकिंग/लाइव में वर्जित।"
+                            } else {
+                                "Warning Status Record (Pending): Source verification pending; excluded from Breaking/Live."
+                            }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (article.verificationStatus == VerificationStatus.BLOCKED) BreakingCrimson else StaleAmber,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Top Meta Row: Breaking Badge (only when VERIFIED!) / Scope / Editorial State / Language Tag
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -764,7 +999,7 @@ fun BroadsheetArticleCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (article.isBreakingOrLive) {
+                    if (article.isBreakingOrLive && article.verificationStatus == VerificationStatus.VERIFIED) {
                         Surface(
                             color = BreakingCrimson,
                             shape = RoundedCornerShape(4.dp)
@@ -789,9 +1024,23 @@ fun BroadsheetArticleCard(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
+                    if (article.editorialState != EditorialState.ACTIVE) {
+                        Surface(
+                            color = StaleAmberBg,
+                            border = BorderStroke(1.dp, StaleAmber),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = if (isHi) article.editorialState.labelHi else article.editorialState.labelEn,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = StaleAmber,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
 
-                // Original Factual Headline Language Badge (No invented translator output)
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(4.dp)
@@ -806,7 +1055,7 @@ fun BroadsheetArticleCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Factual Headline (Serif Broadsheet Typography)
+            // Factual Headline
             Text(
                 text = article.title,
                 style = MaterialTheme.typography.titleLarge,
@@ -815,60 +1064,91 @@ fun BroadsheetArticleCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Mandatory Source Attribution + Rights Status Badge
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            // Section 7.2 & 7.3: Show "Source: [publisher]" next to "Source verification: [status]" BEFORE timestamp!
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        RoundedCornerShape(6.dp)
+                    )
+                    .padding(10.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = "Verified Source",
-                        tint = VerifiedEmerald,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = article.consolidatedSources.joinToString(" + "),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Surface(
-                    color = if (article.rightsStatus == RightsStatus.LINK_ONLY) {
-                        NetraAmberMuted
+                Text(
+                    text = if (isHi) {
+                        "स्रोत (Source): ${article.consolidatedSources.joinToString(" + ")}"
                     } else {
-                        VerifiedEmeraldBg
+                        "Source: ${article.consolidatedSources.joinToString(" + ")}"
                     },
-                    shape = RoundedCornerShape(4.dp),
-                    border = BorderStroke(
-                        1.dp,
-                        if (article.rightsStatus == RightsStatus.LINK_ONLY) NetraAmberDeep else VerifiedEmerald
-                    )
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = if (isHi) article.rightsStatus.labelHi else article.rightsStatus.labelEn,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (article.rightsStatus == RightsStatus.LINK_ONLY) NetraNavyDeep else VerifiedEmerald,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    SourceVerificationStatusBadge(
+                        status = article.verificationStatus,
+                        isHi = isHi,
+                        modifier = Modifier.testTag("verification_badge_${article.id}")
                     )
+
+                    Surface(
+                        color = if (article.rightsStatus == RightsStatus.LINK_ONLY) {
+                            NetraAmberMuted
+                        } else if (article.rightsStatus == RightsStatus.BLOCKED) {
+                            BreakingCrimsonBg
+                        } else {
+                            VerifiedEmeraldBg
+                        },
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            if (article.rightsStatus == RightsStatus.LINK_ONLY) {
+                                NetraAmberDeep
+                            } else if (article.rightsStatus == RightsStatus.BLOCKED) {
+                                BreakingCrimson
+                            } else {
+                                VerifiedEmerald
+                            }
+                        )
+                    ) {
+                        Text(
+                            text = "Rights: ${article.rightsStatus.wireKey}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (article.rightsStatus == RightsStatus.BLOCKED) BreakingCrimson else NetraNavyDeep,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Rights-Permitted Summary OR Neutral Link-Out Notice (Section 2.3)
-            if (permittedSummary != null) {
+            // Rights-Permitted Summary OR Neutral Withheld/Link-Out Notice (Section 2.3 & 7.4)
+            if (article.verificationStatus == VerificationStatus.BLOCKED || article.rightsStatus == RightsStatus.BLOCKED) {
+                Surface(
+                    color = BreakingCrimsonBg,
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.dp, BreakingCrimson),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (isHi) {
+                            "तटस्थ रोकी गई सूचना (Withheld Notice - धारा 7.4): इस अवरुद्ध रिकॉर्ड के लिए कोई स्क्रैप किया गया पाठ, मीडिया या असुरक्षित लिंक उपलब्ध नहीं है। कारण: ${article.verificationReason ?: "अधिकार/स्रोत अपुष्ट"}"
+                        } else {
+                            "Neutral Withheld Notice (Sec 7.4): No scraped body, media, or clickable unsafe URL is shown for this Blocked record. Reason: ${article.verificationReason ?: "Unverified source/rights"}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BreakingCrimson,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            } else if (permittedSummary != null) {
                 Text(
                     text = permittedSummary,
                     style = MaterialTheme.typography.bodyMedium,
@@ -893,7 +1173,7 @@ fun BroadsheetArticleCard(
                 }
             }
 
-            // Visible Correction Notice if present (Section 2.5)
+            // Visible Correction Notice if present (Section 2.5 & 7.4)
             if (article.corrections.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 article.corrections.forEach { corr ->
@@ -928,7 +1208,7 @@ fun BroadsheetArticleCard(
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Timestamps & Action Buttons Row
+            // Timestamp Row (Placed strictly AFTER Publisher & Source Verification per Section 7.3)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -937,7 +1217,7 @@ fun BroadsheetArticleCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (isHi) {
-                            "प्रकाशित: ${article.publishedAtIso ?: "अज्ञात"}"
+                            "प्रकाशित समय: ${article.publishedAtIso ?: "अज्ञात"}"
                         } else {
                             "Published: ${article.publishedAtIso ?: "Unknown"}"
                         },
@@ -959,6 +1239,18 @@ fun BroadsheetArticleCard(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Section 8.1: Report Article Issue button on every item
+                    IconButton(
+                        onClick = onReportIssue,
+                        modifier = Modifier.testTag("report_issue_btn_${article.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Flag,
+                            contentDescription = if (isHi) "लेख समस्या रिपोर्ट करें" else "Report article issue",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
                     IconButton(
                         onClick = onToggleBookmark,
                         modifier = Modifier.testTag("bookmark_btn_${article.id}")
@@ -972,6 +1264,7 @@ fun BroadsheetArticleCard(
 
                     Button(
                         onClick = onOpenExternalUrl,
+                        enabled = isLinkClickable,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = NetraNavyPrimary,
                             contentColor = NetraAmberPrimary
@@ -980,15 +1273,21 @@ fun BroadsheetArticleCard(
                         modifier = Modifier.testTag("open_source_btn_${article.id}")
                     ) {
                         Text(
-                            text = if (isHi) "स्रोत लिंक खोलें" else "Open Source",
+                            text = if (!isLinkClickable) {
+                                if (isHi) "लिंक अवरुद्ध" else "Link Blocked"
+                            } else {
+                                if (isHi) "स्रोत लिंक खोलें" else "Open Source"
+                            },
                             style = MaterialTheme.typography.labelMedium
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp)
-                        )
+                        if (isLinkClickable) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -1127,7 +1426,10 @@ private fun TransparencyAuditFooterCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Icon(
                         imageVector = Icons.Default.Security,
                         contentDescription = null,
@@ -1137,7 +1439,7 @@ private fun TransparencyAuditFooterCard(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (isHi) {
-                            "पारदर्शिता लेजर: वापस लिए गए लेख (${uiState.retractedNotices.size}) व अवरुद्ध TEST आइटम (${uiState.rejectedAuditEntries.size})"
+                            "पारदर्शिता लेजर: संपादकीय वापसी (${uiState.retractedNotices.size}) व अवरुद्ध TEST आइटम (${uiState.rejectedAuditEntries.size})"
                         } else {
                             "Transparency Ledger: Retracted (${uiState.retractedNotices.size}) & Blocked TEST Items (${uiState.rejectedAuditEntries.size})"
                         },
@@ -1153,9 +1455,9 @@ private fun TransparencyAuditFooterCard(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 Text(
                     text = if (isHi) {
-                        "धारा 2.4, 2.5 व 6.3 प्रवर्तन: वापस लिए गए (RETRACTED) या TEST फिक्स्चर (id=test-001) को कभी भी मुख्य समाचार के रूप में प्रदर्शित नहीं किया जाता।"
+                        "धारा 2.4, 7.5 व 9.3 प्रवर्तन: वापस लिए गए (editorialState=RETRACTED) या TEST फिक्स्चर (id=test-001) को कभी भी मुख्य समाचार के रूप में प्रदर्शित नहीं किया जाता।"
                     } else {
-                        "Sec 2.4, 2.5 & 6.3 Enforcement: RETRACTED items and TEST fixtures (id=test-001) are actively blocked from the live reader feed."
+                        "Sec 2.4, 7.5 & 9.3 Enforcement: Retracted items (editorialState=RETRACTED) and TEST fixtures (id=test-001) are actively blocked from the verified reader feed."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1177,7 +1479,7 @@ private fun TransparencyAuditFooterCard(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Status: verification=${item.verificationStatus.wireKey}, rights=${item.rightsStatus.wireKey}",
+                                text = "verificationStatus=${item.verificationStatus.wireKey} | editorialState=${item.editorialState.wireKey} | rightsStatus=${item.rightsStatus.wireKey}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = BreakingCrimson
                             )
@@ -1194,8 +1496,10 @@ private fun TransparencyAuditFooterCard(
 }
 
 /**
- * Item Detail & Provenance Sheet (Section 1.2, 2.1, 3.6):
- * Shows full evidence record and opens external HTTPS link without any privileged JS WebView.
+ * Item Detail & Provenance Sheet (Updated for Build Specification v3, Sections 1.2, 2.1, 3.6, 7.3, 8.1):
+ * - Repeats `Source: [publisher]` and `Source verification: [status]` near attribution
+ *   with `verificationCheckedAt`, `verificationReason`, and the original source link when safe.
+ * - Includes "Report article issue" button prefilling `articleId`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1203,9 +1507,13 @@ fun ArticleDetailProvenanceSheet(
     article: ArticleRecord,
     isHi: Boolean,
     onDismiss: () -> Unit,
+    onReportIssue: () -> Unit,
     onOpenExternalUrl: (String) -> Unit
 ) {
     BackHandler { onDismiss() }
+    val isLinkClickable = remember(article) {
+        ValidationAndRightsEngine.isClickableSourceLinkAllowed(article)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss
@@ -1214,73 +1522,112 @@ fun ArticleDetailProvenanceSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 12.dp)
+                .testTag("article_detail_sheet")
         ) {
             Text(
-                text = if (isHi) "समाचार प्रमाण एवं अधिकार रिकॉर्ड (Article Provenance)" else "Article Evidence & Rights Contract Record",
+                text = if (isHi) "समाचार प्रमाण, स्रोत सत्यापन एवं अधिकार रिकॉर्ड" else "Article Evidence, Source Verification & Rights Record",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = article.title,
                 style = MaterialTheme.typography.headlineSmall
             )
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            ProvenanceRow("Article ID", article.id)
-            ProvenanceRow("Publisher(s)", article.consolidatedSources.joinToString(", "))
-            ProvenanceRow("Canonical HTTPS URL", article.canonicalSourceUrl)
-            ProvenanceRow("Scope / Territory", "${article.scope.wireKey.uppercase()} (${article.countryCode ?: "IN"} / ${article.stateCode ?: "-"} / ${article.cityId ?: "-"})")
-            ProvenanceRow("Source PublishedAt", article.publishedAtIso ?: "null (Unverified)")
-            ProvenanceRow("VerifiedAt", article.verifiedAtIso ?: "null")
-            ProvenanceRow("Verification Status", article.verificationStatus.wireKey)
-            ProvenanceRow("Rights Status", "${article.rightsStatus.wireKey} (${if (isHi) article.rightsStatus.labelHi else article.rightsStatus.labelEn})")
-
-            Spacer(modifier = Modifier.height(12.dp))
+            // Section 7.3: Repeat Source & Source Verification Badge near attribution
             Surface(
-                color = NetraAmberMuted,
+                color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = if (isHi) {
-                        "सुरक्षा अनुबंध (धारा 3.6): बाहरी लिंक आपके सुरक्षित ब्राउज़र / कस्टम टैब में खुलते हैं। नेत्र न्यूज़ किसी भी बाहरी पेज के लिए जावास्क्रिप्ट ब्रिज वाला WebView नहीं चलाता।"
-                    } else {
-                        "Security Contract (Sec 3.6): Source links open in your external browser/custom tab. Netra News never loads external pages inside a privileged JavaScript WebView."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = NetraNavyDeep,
-                    modifier = Modifier.padding(10.dp)
-                )
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = if (isHi) {
+                            "स्रोत (Source): ${article.consolidatedSources.joinToString(", ")}"
+                        } else {
+                            "Source: ${article.consolidatedSources.joinToString(", ")}"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    SourceVerificationStatusBadge(
+                        status = article.verificationStatus,
+                        isHi = isHi
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (isHi) {
+                            "ईमानदार दायरा (धारा 7.2): यह इस आइटम के लिए दर्ज की गई स्रोत सत्यापन स्थिति है, प्रत्येक तथ्य के सत्य होने की गारंटी नहीं।"
+                        } else {
+                            "Honest Scope (Sec 7.2): This is the source verification status recorded for the item, not a guarantee that every fact is true."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            ProvenanceRow("Article ID", article.id)
+            ProvenanceRow("Source Verification", "${article.verificationStatus.labelEn} (${article.verificationStatus.wireKey})")
+            ProvenanceRow("verificationCheckedAt", article.verificationCheckedAtIso ?: "null (Pending/Unchecked)")
+            ProvenanceRow("verificationReason", article.verificationReason ?: "null")
+            ProvenanceRow("Editorial State", "${article.editorialState.labelEn} (${article.editorialState.wireKey})")
+            ProvenanceRow("Rights Status", "${article.rightsStatus.wireKey} (${if (isHi) article.rightsStatus.labelHi else article.rightsStatus.labelEn})")
+            ProvenanceRow("Source PublishedAt", article.publishedAtIso ?: "null (Unverified)")
+            ProvenanceRow(
+                "Original Source Link",
+                if (isLinkClickable) article.canonicalSourceUrl else "[Withheld / Blocked Unsafe URL]"
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onDismiss) {
-                    Text(if (isHi) "बंद करें" else "Close")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = { onOpenExternalUrl(article.canonicalSourceUrl) },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = NetraNavyPrimary,
-                        contentColor = NetraAmberPrimary
-                    )
+                OutlinedButton(
+                    onClick = onReportIssue,
+                    modifier = Modifier.testTag("detail_report_issue_btn")
                 ) {
-                    Text(if (isHi) "HTTPS स्रोत ब्राउज़र में खोलें" else "Open Canonical HTTPS Source")
-                    Spacer(modifier = Modifier.width(6.dp))
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        imageVector = Icons.Default.Flag,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (isHi) "त्रुटि रिपोर्ट करें" else "Report Issue")
+                }
+
+                Row {
+                    TextButton(onClick = onDismiss) {
+                        Text(if (isHi) "बंद करें" else "Close")
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Button(
+                        onClick = { onOpenExternalUrl(article.canonicalSourceUrl) },
+                        enabled = isLinkClickable,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NetraNavyPrimary,
+                            contentColor = NetraAmberPrimary
+                        )
+                    ) {
+                        Text(
+                            if (!isLinkClickable) {
+                                if (isHi) "लिंक अवरुद्ध" else "Link Blocked"
+                            } else {
+                                if (isHi) "HTTPS स्रोत खोलें" else "Open HTTPS Source"
+                            }
+                        )
+                    }
                 }
             }
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
         }
     }
 }
@@ -1290,20 +1637,20 @@ private fun ProvenanceRow(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
+            .padding(vertical = 2.5.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(0.38f)
+            modifier = Modifier.weight(0.40f)
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(0.62f)
+            modifier = Modifier.weight(0.60f)
         )
     }
 }

@@ -5,16 +5,17 @@ import com.example.domain.FeatureMatrixItem
 import com.example.domain.OpenDecisionRecord
 
 /**
- * Governance, Stage Matrix, Open Decisions, and Review Packet Ledger (Sections 5, 6.6, 7, 8).
+ * Governance, Stage Matrix, Open Decisions, and Review Packet Ledger (Build Specification v3, 6 Nov 2026).
  */
 object GovernanceLedgerData {
 
-    const val SPEC_DATE_LABEL = "6 Nov 2026 | Target Review Window: 15 Nov 2026"
-    const val APP_VERSION_LABEL = "v1.0.0-stage1 (Stage-1 Candidate)"
+    const val SPEC_DATE_LABEL = "Build Spec v3 | 6 Nov 2026 (12:28 IST Repo Audit) | Target: 15 Nov 2026"
+    const val APP_VERSION_LABEL = "v1.0.0-stage1-v3"
+    const val WEB_REFERENCE_REPO = "github.com/prayagideepak-collab/Netra-News-Web (Audited Head: 804931da1228cfbe3b1da8462ac9d95198db1fe4)"
     const val PACKAGE_ID_DECISION = "com.aistudio.netranews.kxvqpm (Namespace: com.example, minSdk 24, targetSdk 36)"
 
     /**
-     * Feature Matrix per Section 7.3 & Additional User Instructions (Feature Gate):
+     * Feature Matrix per Section 10.3 & Power Gate:
      * Columns: Required / Implemented / Tested / Blocked + Power Tier, Wakeup Cost, Network Cost.
      */
     val FEATURE_MATRIX: List<FeatureMatrixItem> = listOf(
@@ -33,18 +34,46 @@ object GovernanceLedgerData {
             notesEn = "Local, State & National tabs; publisher name & rights badge on every item; external HTTPS Custom Tab/Browser."
         ),
         FeatureMatrixItem(
-            id = "stage1-schema-rights",
+            id = "v3-verification-indicators",
             stageNumber = 1,
-            featureTitleHi = "चरण-1: साझा स्कीमा (v1), अधिकार प्रवर्तन व TEST फिक्स्चर अवरोधन",
-            featureTitleEn = "Stage 1: Shared Schema (v1), Rights Contract & TEST Fixture Guard",
+            featureTitleHi = "v3 अतिरिक्त (धारा 7): स्रोत सत्यापन संकेतक (Verified / Pending / Blocked)",
+            featureTitleEn = "v3 Addition (Sec 7): Source Verification Indicators (Verified / Pending / Blocked)",
             requiredBySpec = true,
             status = FeatureGateStatus.TESTED,
             unitTested = true,
             powerTierRequired = "Tier-0 (All Tiers)",
             wakeupsPerHourCost = "0 wakeups/hr",
             networkCallsPerHourCost = "0 extra calls",
-            notesHi = "test-001, भविष्य का समय, असत्यापित/अवरुद्ध लेख और गैर-HTTPS URL स्वचालित रूप से अस्वीकृत।",
-            notesEn = "Rejects test-001, future/missing timestamps, PENDING/BLOCKED/RETRACTED items, and unapproved hosts."
+            notesHi = "होम कार्ड व विवरण पर 'Source: [publisher] • Source verification: [status]'; अज्ञात स्थिति Pending पर फ़ॉलबैक; Pending/Blocked ब्रेकिंग में वर्जित; मोनोक्रोम व TalkBack सुलभ।",
+            notesEn = "Shows 'Source: [publisher] • Source verification: [Verified/Pending/Blocked]'; malformed falls back to Pending; Pending/Blocked barred from Breaking; monochrome & TalkBack accessible."
+        ),
+        FeatureMatrixItem(
+            id = "v3-feedback-minimal-data",
+            stageNumber = 1,
+            featureTitleHi = "v3 अतिरिक्त (धारा 8): लेख त्रुटि रिपोर्ट, सामान्य प्रतिक्रिया व स्थानीय ड्राफ्ट",
+            featureTitleEn = "v3 Addition (Sec 8): Report Article Issue, General Feedback & Local Drafts",
+            requiredBySpec = true,
+            status = FeatureGateStatus.TESTED,
+            unitTested = true,
+            powerTierRequired = "Tier-0 (Local Draft) / Normal-Saver (When Endpoint Ready)",
+            wakeupsPerHourCost = "0 wakeups/hr",
+            networkCallsPerHourCost = "0 calls in Stage 1 (Private D1 Endpoint Unconnected -> Honest Disabled Submit)",
+            notesHi = "20–2000 अक्षर, स्क्रिप्ट अस्वीकृति, स्पैम कूलडाउन/हनीपॉट, बिना खाते के गुमनाम ड्राफ्ट; निजी सर्वर जुड़ने तक रिमोट सबमिट ईमानदारी से अक्षम (कोई नकली सफलता नहीं)।",
+            notesEn = "20–2000 chars, script rejection, cooldown/honeypot, anonymous without account/contact; remote submit honestly disabled until private Worker+D1 endpoint is connected."
+        ),
+        FeatureMatrixItem(
+            id = "stage1-schema-rights",
+            stageNumber = 1,
+            featureTitleHi = "चरण-1: साझा स्कीमा (v1), अधिकार प्रवर्तन, संपादकीय वापसी (Retracted) व test-001 अवरोधन",
+            featureTitleEn = "Stage 1: Shared Schema (v1), Rights Contract, Editorial Retraction & test-001 Guard",
+            requiredBySpec = true,
+            status = FeatureGateStatus.TESTED,
+            unitTested = true,
+            powerTierRequired = "Tier-0 (All Tiers)",
+            wakeupsPerHourCost = "0 wakeups/hr",
+            networkCallsPerHourCost = "0 extra calls",
+            notesHi = "test-001, भविष्य का समय, असत्यापित/अवरुद्ध लेख और गैर-HTTPS URL अस्वीकृत; Retraction एक अलग editorialState के रूप में चिह्नित।",
+            notesEn = "Rejects test-001, future/missing timestamps, and unapproved hosts; Retraction tracked as a separate editorialState."
         ),
         FeatureMatrixItem(
             id = "stage2-bookmarks-prefs",
@@ -133,22 +162,31 @@ object GovernanceLedgerData {
     )
 
     /**
-     * Explicit Assumptions & Unresolved Open Decisions per Section 7.4:
+     * Explicit Assumptions & Unresolved Open Decisions per Section 10.4 (Updated for v3):
      */
     val OPEN_DECISIONS: List<OpenDecisionRecord> = listOf(
         OpenDecisionRecord(
             id = "dec-repo-target",
-            decisionTitleHi = "1. वास्तविक GitHub रिपॉजिटरी और परिनियोजन लक्ष्य (Repository & Deployment Target)",
-            decisionTitleEn = "1. Real Repository & Deployment Target",
-            currentAssumptionHi = "लाइव इन्वेंट्री में कोई 'netra-news' रिपॉजिटरी नहीं मिली (404)। यह स्रोत पैकेज स्वामी की समीक्षा शाखा (review branch) के लिए तैयार किया गया है।",
-            currentAssumptionEn = "Live lookup for org 'netra-news' returned 404. Codebase is structured cleanly for owner handoff to a review branch PR.",
-            ownerActionNeededHi = "सही GitHub रिपॉजिटरी URL और शाखा (branch) नाम की पुष्टि करें।",
-            ownerActionNeededEn = "Confirm canonical GitHub repository URL and target review branch."
+            decisionTitleHi = "1. संदर्भ वेब रिपॉजिटरी (12:28 IST अपडेट) और एंड्रॉइड परिनियोजन लक्ष्य",
+            decisionTitleEn = "1. Reference Web Repository (12:28 IST Update) & Android Target",
+            currentAssumptionHi = "स्वामी ने वेब संदर्भ रिपॉजिटरी github.com/prayagideepak-collab/Netra-News-Web (सत्यापित हेड: 804931d, 10 डोमेन परीक्षण उत्तीर्ण) प्रदान की है। यह एंड्रॉइड ऐप उसी साझा स्कीमा (v1) और सत्यापन संकेतकों का पालन करता है।",
+            currentAssumptionEn = "Owner supplied github.com/prayagideepak-collab/Netra-News-Web (audited head 804931d, 10 domain tests passing). This Android codebase mirrors the shared schema v1, verification indicators, and feedback contract.",
+            ownerActionNeededHi = "एंड्रॉइड समीक्षा शाखा (review branch) या मोनोरेपो सबफ़ोल्डर गंतव्य की पुष्टि करें।",
+            ownerActionNeededEn = "Confirm whether Android source merges into a branch of Netra-News-Web or a dedicated Android repo."
+        ),
+        OpenDecisionRecord(
+            id = "dec-feedback-endpoint",
+            decisionTitleHi = "2. निजी प्रतिक्रिया स्टोरेज एंडपॉइंट और प्रतिधारण नीति (Section 8 Private Feedback Endpoint)",
+            decisionTitleEn = "2. Private Feedback Endpoint (Cloudflare Worker + D1) & Retention Approval",
+            currentAssumptionHi = "निजी HTTPS सबमिशन एंडपॉइंट (जैसे Cloudflare Worker + D1 निःशुल्क टियर) अभी तक लाइव नहीं जोड़ा गया है। धारा 8.9 के अनुसार, रिमोट सबमिट को ईमानदारी से अक्षम रखा गया है और केवल स्थानीय डिवाइस ड्राफ्ट (Room) सहेजा जाता है।",
+            currentAssumptionEn = "Private HTTPS feedback endpoint (e.g., Cloudflare Worker + D1 free plan) is not yet provisioned. Per Section 8.9, remote submit is honestly disabled (never simulated) and optional local drafts are preserved on device.",
+            ownerActionNeededHi = "निःशुल्क कोटा जांच के बाद निजी एंडपॉइंट URL और 30/90-दिन प्रतिधारण नीति (DPDP समीक्षा सहित) को मंजूरी दें।",
+            ownerActionNeededEn = "Approve the 30-day contact / 90-day unresolved retention defaults after legal/DPDP review and supply the verified private HTTPS worker endpoint."
         ),
         OpenDecisionRecord(
             id = "dec-android-signing",
-            decisionTitleHi = "2. अंतिम पैकेज नाम, minSdk और प्रोडक्शन साइनिंग पहचान",
-            decisionTitleEn = "2. Final Package ID, minSdk & Production Signing Identity",
+            decisionTitleHi = "3. अंतिम पैकेज नाम, minSdk और प्रोडक्शन साइनिंग पहचान",
+            decisionTitleEn = "3. Final Package ID, minSdk & Production Signing Identity",
             currentAssumptionHi = "applicationId='com.aistudio.netranews.kxvqpm', minSdk=24, targetSdk=36। कोई प्राइवेट कीस्टोर Git में नहीं रखा गया है।",
             currentAssumptionEn = "applicationId='com.aistudio.netranews.kxvqpm', minSdk=24, targetSdk=36. Debug build uses container debug keystore; production signing keys excluded from Git.",
             ownerActionNeededHi = "प्रोडक्शन APK रिलीज़ से पहले अंतिम पैकेज नाम और सुरक्षित ऑफ़लाइन अपलोड कीस्टोर प्रमाणपत्र की पुष्टि करें।",
@@ -156,21 +194,12 @@ object GovernanceLedgerData {
         ),
         OpenDecisionRecord(
             id = "dec-publisher-rights",
-            decisionTitleHi = "3. प्रकाशक लिखित अनुमति और पूर्ण-पाठ अधिकार (Publisher Permissions)",
-            decisionTitleEn = "3. Permitted Source Feeds & Publisher Rights Replies",
+            decisionTitleHi = "4. प्रकाशक लिखित अनुमति और पूर्ण-पाठ अधिकार (Publisher Permissions)",
+            decisionTitleEn = "4. Permitted Source Feeds & Publisher Rights Replies",
             currentAssumptionHi = "पूर्व में भेजे गए प्रकाशक अनुमति अनुरोधों के उत्तर अभी असत्यापित हैं। इसलिए गैर-सरकारी फ़ीड डिफ़ॉल्ट रूप से LINK_ONLY (केवल शीर्षक + बाहरी लिंक) पर हैं।",
             currentAssumptionEn = "Publisher permission replies are not yet verified. All broadcasters default to strict LINK_ONLY attribution; only public-domain official releases (PIB/IMD/NCS) show brief permitted metadata.",
             ownerActionNeededHi = "प्रत्येक प्रकाशक की लिखित अनुमति को स्रोत लेजर (Source Ledger) में दर्ज करें।",
             ownerActionNeededEn = "Record signed publisher licensing replies before enabling licensed summaries or thumbnails."
-        ),
-        OpenDecisionRecord(
-            id = "dec-ingestion-route",
-            decisionTitleHi = "4. निःशुल्क कंटेंट-इंजेशन मार्ग और अलर्ट ट्रांसपोर्ट (Free Ingestion & Alert Transport)",
-            decisionTitleEn = "4. Free Content-Ingestion Route & Stage-5 Alert Transport",
-            currentAssumptionHi = "चरण-1 में ऐप सीधे HTTPS (Conditional ETag) और GitHub Pages/Static JSON Envelope स्कीमा (v1) का समर्थन करता है। पृष्ठभूमि अलर्ट चरण-5 तक बंद हैं।",
-            currentAssumptionEn = "Stage-1 uses direct conditional HTTPS pulls against schema v1 envelopes. Background alerts remain disabled pending a zero-cost transport review.",
-            ownerActionNeededHi = "स्थैतिक JSON फ़ीड जनरेटर के लिए GitHub Actions शेड्यूल कोटा और चरण-5 अलर्ट ट्रांसपोर्ट को अंतिम रूप दें।",
-            ownerActionNeededEn = "Approve GitHub Actions static feed cron budget and Stage-5 free alert delivery mechanism."
         ),
         OpenDecisionRecord(
             id = "dec-language-policy",
@@ -180,14 +209,28 @@ object GovernanceLedgerData {
             currentAssumptionEn = "Hindi-first UI with English toggle. Factual article headlines are rendered strictly in their verified source language without machine translation.",
             ownerActionNeededHi = "द्विभाषी प्रकाशक फ़ीड उपलब्ध होने पर ही समानांतर शीर्षक जोड़ें।",
             ownerActionNeededEn = "Only pair Hindi/English headlines when the source publisher issues official bilingual bulletins."
+        ),
+        OpenDecisionRecord(
+            id = "dec-alert-thresholds",
+            decisionTitleHi = "6. आपातकालीन अलर्ट थ्रेशोल्ड और मुद्रीकरण सीमाएं (Alert Thresholds & Monetisation)",
+            decisionTitleEn = "6. Alert Thresholds & Monetisation Boundaries (Section 10.4)",
+            currentAssumptionHi = "चरण-1 में पुश नोटिफिकेशन अक्षम हैं (कोई POST_NOTIFICATIONS अनुमति नहीं)। लाइव या ब्रेकिंग न्यूज़ और आपातकालीन बुलेटिन के दौरान कोई विज्ञापन या ट्रैकर नहीं है।",
+            currentAssumptionEn = "Push notifications are disabled in Stage-1 (no POST_NOTIFICATIONS requested). Zero ads or third-party trackers during Live, Breaking News, or civic bulletins.",
+            ownerActionNeededHi = "चरण-5 में IMD/NCS अलर्ट के लिए न्यूनतम भूकंप परिमाण (Mw) और गंभीर मौसम थ्रेशोल्ड को अंतिम रूप दें।",
+            ownerActionNeededEn = "Confirm minimum earthquake magnitude (Mw) and IMD alert severity thresholds before enabling Stage-5 notifications."
         )
     )
 
     val NETRA_ECOSYSTEM_LINKS: List<Triple<String, String, String>> = listOf(
         Triple(
-            "नेत्र न्यूज़ (Netra News - Android & Web Spec)",
-            "चरण-1 सत्यापित समाचार रीडर (यह ऐप) — स्थानीय, राज्य व राष्ट्रीय स्रोत लिंक-आउट।",
-            "Stage-1 Verified Newspaper Reader (Current App) — Local, State & National source link-out."
+            "नेत्र न्यूज़ वेब (Netra-News-Web • Audited Head 804931d)",
+            "संदर्भ वेब रिपॉजिटरी: github.com/prayagideepak-collab/Netra-News-Web (10 डोमेन परीक्षण उत्तीर्ण)।",
+            "Reference Web Repository: github.com/prayagideepak-collab/Netra-News-Web (10 domain tests passing)."
+        ),
+        Triple(
+            "नेत्र न्यूज़ एंड्रॉइड (Netra News Android Stage-1 v3)",
+            "चरण-1 सत्यापित समाचार रीडर (यह ऐप) — स्थानीय, राज्य व राष्ट्रीय स्रोत लिंक-आउट, सत्यापन संकेतक व निजी प्रतिक्रिया ड्राफ्ट।",
+            "Stage-1 Verified Newspaper Reader (Current App) — Local, State & National source link-out, verification indicators & local feedback drafts."
         ),
         Triple(
             "नेत्र ह्यूमन सेफ्टी (Netra Human Safety - Separate Product)",

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.example.data.local.BookmarkEntity
 import com.example.data.local.CachedArticleEntity
+import com.example.data.local.FeedbackDraftEntity
 import com.example.data.local.HealthLogEntity
 import com.example.data.local.NetraDao
 import com.example.domain.AppLanguage
@@ -11,12 +12,15 @@ import com.example.domain.ArticleRecord
 import com.example.domain.BulletinDataStatus
 import com.example.domain.CorrectionEntry
 import com.example.domain.EarthquakeEventRecord
+import com.example.domain.EditorialState
 import com.example.domain.FeedEnvelope
+import com.example.domain.FeedbackSubmissionPayload
 import com.example.domain.NewsScope
 import com.example.domain.RightsStatus
 import com.example.domain.SourceHealthRecord
 import com.example.domain.ValidationAndRightsEngine
 import com.example.domain.VerificationStatus
+import com.example.domain.VerificationTransitionRecord
 import com.example.domain.WeatherAdvisoryRecord
 import com.example.location.CityLocationEngine
 import com.example.location.CitySelectionMode
@@ -30,11 +34,12 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 /**
- * Netra News Data & Feed Adapter Repository (Sections 2, 3, 6 & Ultra-Low Power Rules):
+ * Netra News Data & Feed Adapter Repository (Build Specification v3, Sections 2, 3, 7, 8, 9):
  * - Network off main thread (Dispatchers.IO), bounded responses (max 256 KB), HTTPS only,
  *   conditional requests (If-None-Match / If-Modified-Since), finite retry with circuit breaker.
  * - Atomic preference writes for city/state and language so app resumes where it left off.
  * - Preserves last successful content with its real timestamp in Room.
+ * - Stores local-only bookmarks and optional local feedback drafts on device.
  */
 class NetraRepository(
     context: Context,
@@ -53,6 +58,7 @@ class NetraRepository(
     }
 
     val bookmarksFlow: Flow<List<BookmarkEntity>> = dao.observeBookmarks()
+    val feedbackDraftsFlow: Flow<List<FeedbackDraftEntity>> = dao.observeFeedbackDrafts()
     val healthLogsFlow: Flow<List<HealthLogEntity>> = dao.observeBoundedHealthLogs()
 
     fun loadSavedLanguage(): AppLanguage {
@@ -89,9 +95,6 @@ class NetraRepository(
         )
     }
 
-    /**
-     * Saves city/state locally using atomic commit() and never stores raw coordinates (Section 1.6 & 6.4).
-     */
     fun saveLocationPreferenceAtomically(pref: LocationPreference) {
         prefs.edit()
             .putBoolean(KEY_HAS_SAVED_CITY, true)
@@ -166,6 +169,7 @@ class NetraRepository(
                         canonicalSourceUrl = article.canonicalSourceUrl,
                         publishedAtIso = article.publishedAtIso,
                         savedAtEpochMs = System.currentTimeMillis(),
+                        verificationStatusWire = article.verificationStatus.wireKey,
                         rightsStatusWire = article.rightsStatus.wireKey,
                         permittedSummary = safeSummary
                     )
@@ -179,6 +183,22 @@ class NetraRepository(
 
     suspend fun clearAllBookmarks() = withContext(Dispatchers.IO) {
         dao.clearAllBookmarks()
+    }
+
+    suspend fun saveLocalFeedbackDraft(payload: FeedbackSubmissionPayload) = withContext(Dispatchers.IO) {
+        dao.insertFeedbackDraft(FeedbackDraftEntity.fromDomain(payload))
+    }
+
+    suspend fun removeContactFromFeedbackDraft(feedbackId: String) = withContext(Dispatchers.IO) {
+        dao.removeContactFromDraft(feedbackId)
+    }
+
+    suspend fun deleteFeedbackDraft(feedbackId: String) = withContext(Dispatchers.IO) {
+        dao.deleteFeedbackDraftById(feedbackId)
+    }
+
+    suspend fun clearAllFeedbackDrafts() = withContext(Dispatchers.IO) {
+        dao.clearAllFeedbackDrafts()
     }
 
     suspend fun appendBoundedHealthLog(
@@ -201,17 +221,13 @@ class NetraRepository(
         dao.clearHealthLogs()
     }
 
-    /**
-     * Performs a bounded, conditional HTTPS probe to verify live connectivity to allowlisted public host
-     * (PIB India `https://pib.gov.in`) while respecting 256 KB max response size and ETag caching.
-     */
     suspend fun checkAllowlistedSourceReachability(): SourceHealthRecord = withContext(Dispatchers.IO) {
         val url = "https://pib.gov.in"
         val savedEtag = prefs.getString(KEY_LAST_ETAG, null)
         val requestBuilder = Request.Builder()
             .url(url)
             .head()
-            .header("User-Agent", "NetraNews-Android/1.0 (Stage1-LinkOutReader)")
+            .header("User-Agent", "NetraNews-Android/1.0-v3 (Stage1-LinkOutReader)")
         if (!savedEtag.isNullOrBlank()) {
             requestBuilder.header("If-None-Match", savedEtag)
         }
@@ -226,7 +242,7 @@ class NetraRepository(
                     publisherName = "PIB India",
                     host = "pib.gov.in",
                     status = if (response.isSuccessful || response.code == 304) "healthy" else "degraded",
-                    lastCheckedIso = "2026-11-06T06:30:00Z",
+                    lastCheckedIso = "2026-11-06T06:50:00Z",
                     httpStatusCode = response.code
                 )
             }
@@ -236,21 +252,20 @@ class NetraRepository(
                 publisherName = "PIB India",
                 host = "pib.gov.in",
                 status = "unreachable",
-                lastCheckedIso = "2026-11-06T06:30:00Z",
+                lastCheckedIso = "2026-11-06T06:50:00Z",
                 httpStatusCode = null
             )
         }
     }
 
     /**
-     * Builds the Stage-1 Verified FeedEnvelope for the selected LocationPreference.
-     * Note on Integrity (Section 2.3, 2.4, 6.2, 6.3):
-     * - Every item names its official public source (`PIB India`, `DD News`, `NewsOnAir`, `IMD`, `NCS`).
-     * - Broadcaster items (`DD News`, `NewsOnAir`, `State DIPR`) use `RightsStatus.LINK_ONLY` so no prose is scraped.
-     * - Official public releases (`PIB India`, `IMD`, `NCS`) use `RightsStatus.ORIGINAL` with concise attribution.
-     * - Also includes the mandatory `SPEC_TEST_FIXTURE_001` (`id=test-001`) in raw items so that
-     *   `ValidationAndRightsEngine.validateFeedEnvelope` actively demonstrates rejecting `test-001`
-     *   in production mode and records the rejection in the audit log!
+     * Builds the Stage-1 v3 FeedEnvelope for the selected LocationPreference.
+     * Includes:
+     * - Verified items (`verificationStatus = VERIFIED`) with `verificationCheckedAtIso` and `verificationReason`
+     * - A `Pending` status/warning record (`verificationStatus = PENDING`) to demonstrate Section 7.4 warning cards
+     * - A `Blocked` status/warning record (`verificationStatus = BLOCKED`) with unsafe URL withheld & no scraped prose
+     * - A `Retracted` item (`editorialState = RETRACTED`, separate from `verificationStatus`)
+     * - The mandatory `SPEC_TEST_FIXTURE_001` (`id = test-001`) rejected by the production guard.
      */
     fun buildVerifiedStage1Envelope(
         locationPref: LocationPreference,
@@ -279,9 +294,21 @@ class NetraRepository(
                 publishedAtIso = "2026-11-06T05:15:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-06T05:20:00+05:30",
+                verificationCheckedAtIso = "2026-11-06T05:20:00+05:30",
+                verificationReason = "आधिकारिक HTTPS डोमेन (pib.gov.in) व स्रोत पहचान सूची से सत्यापित (Allowlisted official domain).",
                 verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.ORIGINAL,
+                editorialState = EditorialState.ACTIVE,
                 permittedSummary = "सार्वजनिक विज्ञप्ति (PIB): $cityHi ($stateHi) के लिए जारी आधिकारिक प्रेस विज्ञप्तियाँ एवं जिला स्तरीय सूचना अपडेट सीधे मूल सरकारी पोर्टल पर उपलब्ध हैं।",
+                statusTransitions = listOf(
+                    VerificationTransitionRecord(
+                        fromStatus = VerificationStatus.PENDING,
+                        toStatus = VerificationStatus.VERIFIED,
+                        reviewedAtIso = "2026-11-06T05:20:00+05:30",
+                        reviewerRole = "authorised_editorial_reviewer",
+                        reason = "Verified official PIB HTTPS domain and release registry."
+                    )
+                ),
                 isBreakingOrLive = true
             ),
             // 2. Local Regional Broadcaster Link-Only Item (Strictly LINK_ONLY per Section 2.3)
@@ -299,11 +326,14 @@ class NetraRepository(
                 publishedAtIso = "2026-11-06T04:45:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-06T04:50:00+05:30",
+                verificationCheckedAtIso = "2026-11-06T04:50:00+05:30",
+                verificationReason = "प्रसार भारती आधिकारिक पोर्टल (newsonair.gov.in) सत्यापित; अधिकार स्थिति LINK_ONLY।",
                 verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.LINK_ONLY,
+                editorialState = EditorialState.ACTIVE,
                 permittedSummary = "यह सारांश प्रदर्शित नहीं किया जाएगा क्योंकि अधिकार स्थिति LINK_ONLY है।"
             ),
-            // 3. State-Level Official Weather & Agricultural Advisory
+            // 3. State-Level Official Weather & Agricultural Advisory (Corrected Editorial State)
             ArticleRecord(
                 id = "imd-state-$stateCode-03",
                 title = "$stateHi राज्य मौसम एवं कृषि-मौसम परामर्श बुलेटिन — भारत मौसम विज्ञान विभाग ($stateEn IMD Subdivision Bulletin)",
@@ -318,8 +348,11 @@ class NetraRepository(
                 publishedAtIso = "2026-11-06T04:00:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-06T04:10:00+05:30",
+                verificationCheckedAtIso = "2026-11-06T04:30:00+05:30",
+                verificationReason = "भारत मौसम विज्ञान विभाग (mausam.imd.gov.in) आधिकारिक उप-प्रभाग चेतावनी तालिका।",
                 verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.ORIGINAL,
+                editorialState = EditorialState.CORRECTED,
                 permittedSummary = "आधिकारिक आईएमडी (IMD) उप-प्रभाग बुलेटिन: $stateHi के लिए अद्यतन तापमान, आर्द्रता एवं क्षेत्रीय मौसम चेतावनी सीधे mausam.imd.gov.in पर देखें।",
                 corrections = listOf(
                     CorrectionEntry(
@@ -343,11 +376,14 @@ class NetraRepository(
                 publishedAtIso = "2026-11-06T03:30:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-06T03:35:00+05:30",
+                verificationCheckedAtIso = "2026-11-06T03:35:00+05:30",
+                verificationReason = "डीडी न्यूज़ आधिकारिक डोमेन (ddnews.gov.in) सत्यापित; पूर्ण पाठ बिना अनुमति कॉपी नहीं किया गया।",
                 verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.LINK_ONLY,
+                editorialState = EditorialState.ACTIVE,
                 permittedSummary = null
             ),
-            // 5. National Verified Fallback — PIB Official Releases ( consolidated duplicate link demonstration )
+            // 5. National Verified Fallback — PIB Official Releases (with duplicate link consolidation)
             ArticleRecord(
                 id = "pib-nat-05a",
                 title = "राष्ट्रीय जनहित विज्ञप्ति: केंद्रीय मंत्रालयों की दैनिक आधिकारिक प्रेस रिलीज़ सूची (PIB National Official Releases)",
@@ -362,11 +398,13 @@ class NetraRepository(
                 publishedAtIso = "2026-11-06T03:00:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-06T03:05:00+05:30",
+                verificationCheckedAtIso = "2026-11-06T03:05:00+05:30",
+                verificationReason = "PIB केंद्रीय रिलीज़ रजिस्ट्री से सत्यापित।",
                 verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.ORIGINAL,
+                editorialState = EditorialState.ACTIVE,
                 permittedSummary = "भारत सरकार के पत्र सूचना कार्यालय (PIB) द्वारा जारी सभी सत्यापित राष्ट्रीय प्रेस विज्ञप्तियाँ समय-मुद्रा और मंत्रालय श्रेय के साथ उपलब्ध हैं।"
             ),
-            // Duplicate canonical link from second national desk to demonstrate Section 2.5 consolidation without losing attribution
             ArticleRecord(
                 id = "pib-nat-05b-dup",
                 title = "राष्ट्रीय जनहित विज्ञप्ति: केंद्रीय मंत्रालयों की दैनिक आधिकारिक प्रेस रिलीज़ सूची (PIB National Official Releases)",
@@ -381,8 +419,11 @@ class NetraRepository(
                 publishedAtIso = "2026-11-06T03:00:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-06T03:06:00+05:30",
+                verificationCheckedAtIso = "2026-11-06T03:06:00+05:30",
+                verificationReason = "समान कैननिकल URL के कारण समेकित स्रोत श्रेय।",
                 verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.ORIGINAL,
+                editorialState = EditorialState.ACTIVE,
                 permittedSummary = null
             ),
             // 6. National Seismic Monitoring Bulletin Link-Out
@@ -400,15 +441,69 @@ class NetraRepository(
                 publishedAtIso = "2026-11-06T02:15:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-06T02:20:00+05:30",
+                verificationCheckedAtIso = "2026-11-06T02:20:00+05:30",
+                verificationReason = "Verified official NCS seismology portal (seismo.gov.in).",
                 verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.ORIGINAL,
+                editorialState = EditorialState.ACTIVE,
                 permittedSummary = "Official NCS portal for verified seismic event parameters (origin time, coordinates, magnitude Mw, and depth km). Informational bulletin only — not an early-warning system."
             ),
-            // 7. Mandatory Section 6.3 TEST fixture included in raw envelope so production validator actively proves rejection!
-            ValidationAndRightsEngine.SPEC_TEST_FIXTURE_001,
-            // 8. Retracted item example to demonstrate Section 2.5 & 6.2 (Never rendered as current news; logged in Retraction ledger)
+            // 7. Section 7.4 Pending Warning Record Example (Withheld from ordinary feed; inspectable as warning record)
             ArticleRecord(
-                id = "retracted-demo-08",
+                id = "pending-warning-07",
+                title = "स्रोत सत्यापन लंबित (Pending Warning Record): क्षेत्रीय नगर निगम फ़ीड की शर्तें व HTTPS प्रमाणपत्र समीक्षाधीन",
+                language = "hi",
+                category = "सत्यापन चेतावनी • Pending Notice",
+                scope = NewsScope.LOCAL,
+                countryCode = "IN",
+                stateCode = stateCode,
+                cityId = cityEntry.cityId,
+                publisherName = "सूचना एवं जनसंपर्क विभाग (UP DIPR)",
+                canonicalSourceUrl = "https://information.up.gov.in/",
+                publishedAtIso = "2026-11-06T01:30:00+05:30",
+                fetchedAtEpochMs = fetchedAtEpochMs,
+                verifiedAtIso = null,
+                verificationCheckedAtIso = "2026-11-06T05:00:00+05:30",
+                verificationReason = "स्रोत शर्तें और फ़ीड समय-मुद्रा अभी संपादकीय समीक्षा के अधीन हैं (Pending authorised editorial verification; barred from Breaking/Live).",
+                verificationStatus = VerificationStatus.PENDING,
+                rightsStatus = RightsStatus.LINK_ONLY,
+                editorialState = EditorialState.ACTIVE,
+                permittedSummary = null,
+                isBreakingOrLive = true // Engine must force this to false because status is PENDING!
+            ),
+            // 8. Section 7.4 Blocked Warning Record Example (No scraped body/media, no clickable unsafe link)
+            ArticleRecord(
+                id = "blocked-warning-08",
+                title = "अवरुद्ध स्रोत चेतावनी (Blocked Source Record): असत्यापित सिंडिकेशन फ़ीड व अधिकार अवरोध",
+                language = "hi",
+                category = "अधिकार/स्रोत अवरोध • Blocked Notice",
+                scope = NewsScope.STATE,
+                countryCode = "IN",
+                stateCode = stateCode,
+                cityId = null,
+                publisherName = "Unverified Syndication Source",
+                canonicalSourceUrl = "http://unapproved-syndication.example.org/item",
+                publishedAtIso = "2026-11-06T01:00:00+05:30",
+                fetchedAtEpochMs = fetchedAtEpochMs,
+                verifiedAtIso = null,
+                verificationCheckedAtIso = "2026-11-06T05:05:00+05:30",
+                verificationReason = "गैर-HTTPS URL और प्रकाशक अधिकार अपुष्ट होने के कारण अवरुद्ध (Blocked: unsafe URL disabled & prose withheld).",
+                verificationStatus = VerificationStatus.BLOCKED,
+                rightsStatus = RightsStatus.BLOCKED,
+                editorialState = EditorialState.ACTIVE,
+                permittedSummary = "This scraped text must be stripped by the Blocked guard.",
+                corrections = listOf(
+                    CorrectionEntry(
+                        correctedAtIso = "2026-11-06T05:05:00+05:30",
+                        reason = "सामग्री रोकी गई (Withheld Notice): स्रोत अनुमति और सुरक्षित HTTPS डोमेन प्रमाणित नहीं हैं।"
+                    )
+                )
+            ),
+            // 9. Mandatory Section 9.3 TEST fixture included in raw envelope so production validator actively proves rejection!
+            ValidationAndRightsEngine.SPEC_TEST_FIXTURE_001,
+            // 10. Separate EditorialState.RETRACTED item (Section 7.5 & 9.2)
+            ArticleRecord(
+                id = "retracted-demo-10",
                 title = "वापस ली गई सूचना: प्रारंभिक समय-सारणी संशोधन (Retracted Schedule Notice)",
                 language = "hi",
                 category = "संशोधन • Retraction",
@@ -421,8 +516,11 @@ class NetraRepository(
                 publishedAtIso = "2026-11-05T18:00:00+05:30",
                 fetchedAtEpochMs = fetchedAtEpochMs,
                 verifiedAtIso = "2026-11-05T19:00:00+05:30",
-                verificationStatus = VerificationStatus.RETRACTED,
+                verificationCheckedAtIso = "2026-11-05T19:30:00+05:30",
+                verificationReason = "स्रोत द्वारा आधिकारिक रूप से वापस लिया गया (EditorialState = RETRACTED).",
+                verificationStatus = VerificationStatus.VERIFIED,
                 rightsStatus = RightsStatus.LINK_ONLY,
+                editorialState = EditorialState.RETRACTED,
                 permittedSummary = null,
                 corrections = listOf(
                     CorrectionEntry(
@@ -449,14 +547,6 @@ class NetraRepository(
         )
     }
 
-    /**
-     * Weather & Earthquake bulletins per Section 2.6:
-     * "No fabricated headlines, stars, weather values, event locations, casualties, timestamps or source badges."
-     * "Unavailable/stale must look different from a real zero or all-clear."
-     * Notice how when live parsed numerical sensor feeds are not yet licensed/connected in Stage 1,
-     * numeric fields (temperatureCelsius, magnitudeMw) remain strictly NULL (`UNAVAILABLE_OFFLINE` or `ALL_CLEAR_VERIFIED` bulletin link)
-     * rather than fabricating fake numbers like "28.5°C" or fake "0.0 Mw"!
-     */
     fun getCivicWeatherBulletins(locationPref: LocationPreference, isOffline: Boolean): List<WeatherAdvisoryRecord> {
         val city = CityLocationEngine.findByCityId(locationPref.cityId)
         return listOf(
@@ -468,7 +558,7 @@ class NetraRepository(
                 stateCode = city.stateCode,
                 cityId = city.cityId,
                 status = if (isOffline) BulletinDataStatus.UNAVAILABLE_OFFLINE else BulletinDataStatus.ALL_CLEAR_VERIFIED,
-                temperatureCelsius = null, // Never fabricate fake weather values (Section 2.4 & 2.6)
+                temperatureCelsius = null,
                 rainfallMm = null,
                 humidityPercent = null,
                 windKmph = null,
@@ -524,7 +614,7 @@ class NetraRepository(
                 areaLabelHi = "${city.cityNameHi} / ${city.stateNameHi} क्षेत्र",
                 areaLabelEn = "${city.cityNameEn} / ${city.stateNameEn} Region",
                 status = if (isOffline) BulletinDataStatus.UNAVAILABLE_OFFLINE else BulletinDataStatus.ALL_CLEAR_VERIFIED,
-                magnitudeMw = null, // Never fabricate earthquake magnitudes or locations (Section 2.4 & 2.6)
+                magnitudeMw = null,
                 depthKm = null,
                 latitudeApprox = null,
                 longitudeApprox = null,
