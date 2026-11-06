@@ -119,8 +119,8 @@ enum class RightsStatus(val wireKey: String, val labelHi: String, val labelEn: S
     ),
     ORIGINAL(
         "original",
-        "सार्वजनिक/मूल विज्ञप्ति",
-        "Public Domain / Original Bulletin"
+        "मूल सामग्री (अधिकार प्रमाण आवश्यक)",
+        "Original content (rights evidence required)"
     ),
     BLOCKED(
         "blocked",
