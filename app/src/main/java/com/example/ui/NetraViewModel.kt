@@ -454,8 +454,8 @@ class NetraViewModel(
     }
 
     fun setDiagnosticContractMode(mode: DiagnosticContractMode) {
-        _uiState.update { it.copy(diagnosticMode = mode) }
-        refreshAllFeeds(isUserInitiated = true)
+        // Production feeds cannot be switched into simulated states.
+        return
     }
 
     fun toggleBookmark(article: ArticleRecord) {
@@ -518,10 +518,10 @@ class NetraViewModel(
         if (!_uiState.value.isAppInForeground && !isUserInitiated) return
 
         viewModelScope.launch {
-            val nowRefMs = 1793947200000L
+            val nowRefMs = System.currentTimeMillis()
             val wallNowMs = System.currentTimeMillis()
             val locPref = _uiState.value.locationPreference
-            val diagMode = _uiState.value.diagnosticMode
+            val diagMode = DiagnosticContractMode.LIVE_NORMAL
 
             _uiState.update { it.copy(feedLoadState = FeedLoadState.Loading) }
 
@@ -663,7 +663,7 @@ class NetraViewModel(
 
     private fun recomputeScopedFeedState(
         isStaleEnvelope: Boolean = _uiState.value.diagnosticMode == DiagnosticContractMode.SIMULATE_STALE,
-        generatedAtIso: String = "2026-11-06T00:00:00Z",
+        generatedAtIso: String = "",
         fetchedAtMs: Long = repository.loadLastSuccessfulFetchEpochMs() ?: System.currentTimeMillis()
     ) {
         val state = _uiState.value
@@ -709,7 +709,7 @@ class NetraViewModel(
 
             isStaleEnvelope -> FeedLoadState.Stale(
                 items = scopedItems,
-                lastSuccessfulAtEpochMs = fetchedAtMs - (8L * 3600L * 1000L),
+                lastSuccessfulAtEpochMs = fetchedAtMs,
                 staleReasonHi = "फ़ीड डेटा 6 घंटे से अधिक पुराना (Stale) है। नया अपडेट प्राप्त होने तक अंतिम सत्यापित सामग्री अपने मूल समय-मुद्रा के साथ दिखाई जा रही है।",
                 staleReasonEn = "Feed envelope is older than 6 hours (Stale). Showing last verified content with its original publication timestamp."
             )
