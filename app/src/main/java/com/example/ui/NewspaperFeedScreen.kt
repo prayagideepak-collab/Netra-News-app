@@ -364,15 +364,6 @@ fun NewspaperFeedScreen(
             )
         }
 
-        // 3. Owner Acceptance Contract State Switcher
-        item {
-            DiagnosticContractStrip(
-                currentMode = uiState.diagnosticMode,
-                isHi = isHi,
-                onSelectMode = onSelectDiagnosticMode
-            )
-        }
-
         // 4. External Browser Security / Status Banner
         if (uiState.externalBrowserStatusBanner != null) {
             item {
