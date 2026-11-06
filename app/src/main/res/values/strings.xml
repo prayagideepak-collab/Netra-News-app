@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Netra News</string>
+    <string name="brand_subtitle">नेत्र न्यूज़ • Netra Ecosystem</string>
+    <string name="no_ads_breaking_policy">निःशुल्क व विज्ञापन-मुक्त • No Ads During Live or Breaking News</string>
+    <string name="disclaimer_not_early_warning">केवल आधिकारिक स्रोत सूचना — यह आपातकालीन पूर्व-चेतावनी (Early-Warning) या भूकंप भविष्यवाणी प्रणाली नहीं है। Official source bulletin only — NOT an emergency early-warning system.</string>
+    <string name="privacy_local_only_notice">बुकमार्क और शहर प्राथमिकताएं केवल आपके फ़ोन पर सुरक्षित रहती हैं। कोई क्लाउड खाता, विज्ञापन आईडी या पृष्ठभूमि जीपीएस ट्रैकिंग नहीं।</string>
+</resources>

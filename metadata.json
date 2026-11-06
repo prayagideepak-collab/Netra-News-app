@@ -1,0 +1,6 @@
+{
+  "name": "Netra News",
+  "description": "Hindi-first newspaper reader with verified source attribution, strict rights and schema validation, local-only bookmarks, approximate/manual city selection, and ultra-low power 24/7 operation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
