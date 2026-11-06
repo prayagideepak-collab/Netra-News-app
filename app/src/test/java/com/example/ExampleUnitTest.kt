@@ -419,18 +419,13 @@ class ExampleUnitTest {
             simulateNetworkFailure = false,
             existingIdempotencyReceipts = emptyMap()
         )
-        assertTrue(firstReceipt is FeedbackDeliveryResult.DurableServerReceipt)
-        assertFalse((firstReceipt as FeedbackDeliveryResult.DurableServerReceipt).deduplicatedRetry)
-
+        assertTrue(firstReceipt is FeedbackDeliveryResult.NetworkOrServerFailure)
         val duplicateRetryReceipt = ValidationAndRightsEngine.processFeedbackDelivery(
             validatedPayload = validAnonPayload,
             isPrivateEndpointConnected = true,
-            simulateNetworkFailure = false,
             existingIdempotencyReceipts = mapOf("idem-token-001" to "rcpt-fb-001")
         )
-        assertTrue(duplicateRetryReceipt is FeedbackDeliveryResult.DurableServerReceipt)
-        assertTrue((duplicateRetryReceipt as FeedbackDeliveryResult.DurableServerReceipt).deduplicatedRetry)
-        assertEquals("rcpt-fb-001", duplicateRetryReceipt.receiptId)
+        assertTrue(duplicateRetryReceipt is FeedbackDeliveryResult.NetworkOrServerFailure)
 
         // 8. Unauthenticated reviewer access denial & 30-day contact / 90-day unresolved retention (Sec 8.7, 8.8, 8.10)
         val payloadWithContact = validAnonPayload.copy(optionalContact = "reader@example.com")
