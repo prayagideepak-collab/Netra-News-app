@@ -44,7 +44,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.NetraRepository
-import com.example.data.local.NetraLocalDatabase
+import com.example.data.local.AppDatabase
 import com.example.domain.AppLanguage
 import com.example.location.CityLocationEngine
 import com.example.power.PowerTier
@@ -68,8 +68,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val database = NetraLocalDatabase.getInstance(applicationContext)
-        val repository = NetraRepository(applicationContext, database.netraDao())
+        val database = AppDatabase.getInstance(applicationContext)
+        val repository = NetraRepository(
+            context = applicationContext,
+            dao = database.netraDao(),
+            articleDao = database.articleDao()
+        )
 
         setContent {
             val netraViewModel: NetraViewModel = viewModel(

@@ -1,9 +1,12 @@
 package com.example
 
+import com.example.data.local.ArticleEntity
 import com.example.data.local.CachedArticleEntity
 import com.example.data.local.FeedbackDraftEntity
+import com.example.domain.Article
 import com.example.domain.CorrectionEntry
 import com.example.domain.EditorialState
+import com.example.domain.NewsScope
 import com.example.domain.RightsStatus
 import com.example.domain.ValidationAndRightsEngine
 import com.example.domain.VerificationStatus
@@ -18,10 +21,76 @@ import org.junit.Test
 
 /**
  * Contract & Persistence Mapping Tests (CUJ Verification on Local JVM):
- * Verifies Room entity rights stripping, verificationStatus/editorialState round-trip,
- * local feedback draft entity mapping, city preference structure, and v3 governance matrix.
+ * Verifies domain Article model, ArticleEntity & CachedArticleEntity rights stripping,
+ * verificationStatus/editorialState round-trip, local feedback draft entity mapping,
+ * city preference structure, and v3 governance matrix.
  */
 class ExampleRobolectricTest {
+
+    @Test
+    fun `domain Article and Room ArticleEntity map all required bookmark fields and enforce rights status`() {
+        val domainArticle = Article(
+            id = "up-lko-001",
+            title = "लखनऊ मेट्रो कॉरिडोर विस्तार की आधिकारिक समीक्षा बैठक संपन्न",
+            language = "hi",
+            category = "Civic Infrastructure",
+            scope = NewsScope.LOCAL,
+            cityId = "in-up-lucknow",
+            publisherName = "सूचना एवं जनसंपर्क विभाग, उत्तर प्रदेश",
+            sourceUrl = "https://up.gov.in/en/page/press-release",
+            publishedAt = "2026-11-06T08:15:00+05:30",
+            fetchedAt = 1793947200000L,
+            verificationStatus = VerificationStatus.VERIFIED,
+            rightsStatus = RightsStatus.ORIGINAL,
+            stateCode = "UP",
+            permittedSummary = "लखनऊ में सार्वजनिक परिवहन विस्तार हेतु समीक्षा बैठक का आधिकारिक सारांश।"
+        )
+
+        val entity = ArticleEntity.fromDomain(
+            article = domainArticle,
+            savedAtEpochMs = 1793947250000L,
+            isBookmarked = true
+        )
+        assertEquals("up-lko-001", entity.id)
+        assertEquals("local", entity.scope)
+        assertEquals("in-up-lucknow", entity.cityId)
+        assertEquals("https://up.gov.in/en/page/press-release", entity.sourceUrl)
+        assertEquals("verified", entity.verificationStatus)
+        assertEquals("original", entity.rightsStatus)
+        assertTrue(entity.isBookmarked)
+
+        val roundTrip = entity.toDomain()
+        assertEquals(domainArticle.id, roundTrip.id)
+        assertEquals(domainArticle.title, roundTrip.title)
+        assertEquals(domainArticle.scope, roundTrip.scope)
+        assertEquals(domainArticle.cityId, roundTrip.cityId)
+        assertEquals(domainArticle.publisherName, roundTrip.publisherName)
+        assertEquals(domainArticle.sourceUrl, roundTrip.sourceUrl)
+        assertEquals(domainArticle.publishedAt, roundTrip.publishedAt)
+        assertEquals(domainArticle.fetchedAt, roundTrip.fetchedAt)
+        assertEquals(VerificationStatus.VERIFIED, roundTrip.verificationStatus)
+        assertEquals(RightsStatus.ORIGINAL, roundTrip.rightsStatus)
+        assertEquals(domainArticle.permittedSummary, roundTrip.safePermittedSummary)
+
+        // Verify LINK_ONLY and BLOCKED articles strip unlicensed summaries in ArticleEntity
+        val linkOnlyArticle = domainArticle.copy(
+            id = "dd-lko-002",
+            rightsStatus = RightsStatus.LINK_ONLY,
+            permittedSummary = "Unlicensed summary that must be stripped"
+        )
+        val linkOnlyEntity = ArticleEntity.fromDomain(linkOnlyArticle)
+        assertNull(linkOnlyEntity.permittedSummary)
+        assertNull(linkOnlyEntity.toDomain().safePermittedSummary)
+
+        val blockedArticle = domainArticle.copy(
+            id = "blocked-lko-003",
+            verificationStatus = VerificationStatus.BLOCKED,
+            permittedSummary = "Blocked summary that must be withheld"
+        )
+        val blockedEntity = ArticleEntity.fromDomain(blockedArticle)
+        assertNull(blockedEntity.permittedSummary)
+        assertEquals(VerificationStatus.BLOCKED, blockedEntity.toDomain().verificationStatus)
+    }
 
     @Test
     fun `cached article entity strips summary when rights status is LINK_ONLY or verificationStatus is BLOCKED`() {

@@ -2,12 +2,16 @@ package com.example.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.data.local.AppDatabase
+import com.example.data.local.ArticleDao
+import com.example.data.local.ArticleEntity
 import com.example.data.local.BookmarkEntity
 import com.example.data.local.CachedArticleEntity
 import com.example.data.local.FeedbackDraftEntity
 import com.example.data.local.HealthLogEntity
 import com.example.data.local.NetraDao
 import com.example.domain.AppLanguage
+import com.example.domain.Article
 import com.example.domain.ArticleRecord
 import com.example.domain.BulletinDataStatus
 import com.example.domain.CorrectionEntry
@@ -28,10 +32,15 @@ import com.example.location.LocationPreference
 import com.example.power.PowerTier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+
+typealias AppDatabaseAlias = AppDatabase
+typealias ArticleDaoAlias = ArticleDao
+typealias ArticleEntityAlias = ArticleEntity
 
 /**
  * Netra News Data & Feed Adapter Repository (Build Specification v3, Sections 2, 3, 7, 8, 9):
@@ -39,11 +48,12 @@ import java.util.concurrent.TimeUnit
  *   conditional requests (If-None-Match / If-Modified-Since), finite retry with circuit breaker.
  * - Atomic preference writes for city/state and language so app resumes where it left off.
  * - Preserves last successful content with its real timestamp in Room.
- * - Stores local-only bookmarks and optional local feedback drafts on device.
+ * - Stores local-only bookmarks (`ArticleEntity` & `BookmarkEntity`) and optional local feedback drafts on device.
  */
 class NetraRepository(
     context: Context,
-    private val dao: NetraDao
+    private val dao: NetraDao,
+    private val articleDao: ArticleDao? = null
 ) {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences("netra_news_atomic_prefs", Context.MODE_PRIVATE)
@@ -58,6 +68,8 @@ class NetraRepository(
     }
 
     val bookmarksFlow: Flow<List<BookmarkEntity>> = dao.observeBookmarks()
+    val bookmarkedArticlesFlow: Flow<List<Article>>? =
+        articleDao?.getAllBookmarks()?.map { list -> list.map { it.toDomain() } }
     val feedbackDraftsFlow: Flow<List<FeedbackDraftEntity>> = dao.observeFeedbackDrafts()
     val healthLogsFlow: Flow<List<HealthLogEntity>> = dao.observeBoundedHealthLogs()
 
@@ -154,7 +166,9 @@ class NetraRepository(
         withContext(Dispatchers.IO) {
             if (currentlySavedIds.contains(article.id)) {
                 dao.deleteBookmarkById(article.id)
+                articleDao?.deleteBookmarkById(article.id)
             } else {
+                val nowMs = System.currentTimeMillis()
                 val safeSummary = ValidationAndRightsEngine.getRightsPermittedSummary(article)
                 dao.insertBookmark(
                     BookmarkEntity(
@@ -168,21 +182,44 @@ class NetraRepository(
                         publisherName = article.publisherName,
                         canonicalSourceUrl = article.canonicalSourceUrl,
                         publishedAtIso = article.publishedAtIso,
-                        savedAtEpochMs = System.currentTimeMillis(),
+                        savedAtEpochMs = nowMs,
                         verificationStatusWire = article.verificationStatus.wireKey,
                         rightsStatusWire = article.rightsStatus.wireKey,
                         permittedSummary = safeSummary
                     )
                 )
+                articleDao?.insertBookmark(
+                    ArticleEntity.fromArticleRecord(
+                        record = article,
+                        savedAtEpochMs = nowMs,
+                        isBookmarked = true
+                    )
+                )
             }
         }
 
+    suspend fun saveArticleBookmark(article: Article) = withContext(Dispatchers.IO) {
+        val nowMs = System.currentTimeMillis()
+        val entity = ArticleEntity.fromDomain(article, savedAtEpochMs = nowMs, isBookmarked = true)
+        articleDao?.insertBookmark(entity)
+        dao.insertBookmark(entity.toBookmarkEntity())
+    }
+
+    suspend fun updateArticleBookmark(article: Article) = withContext(Dispatchers.IO) {
+        val nowMs = System.currentTimeMillis()
+        val entity = ArticleEntity.fromDomain(article, savedAtEpochMs = nowMs, isBookmarked = true)
+        articleDao?.updateBookmark(entity)
+        dao.insertBookmark(entity.toBookmarkEntity())
+    }
+
     suspend fun removeBookmark(articleId: String) = withContext(Dispatchers.IO) {
         dao.deleteBookmarkById(articleId)
+        articleDao?.deleteBookmarkById(articleId)
     }
 
     suspend fun clearAllBookmarks() = withContext(Dispatchers.IO) {
         dao.clearAllBookmarks()
+        articleDao?.clearAllBookmarks()
     }
 
     suspend fun saveLocalFeedbackDraft(payload: FeedbackSubmissionPayload) = withContext(Dispatchers.IO) {

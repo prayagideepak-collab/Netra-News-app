@@ -301,15 +301,17 @@ interface NetraDao {
 
 @Database(
     entities = [
+        ArticleEntity::class,
         CachedArticleEntity::class,
         BookmarkEntity::class,
         FeedbackDraftEntity::class,
         HealthLogEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class NetraLocalDatabase : RoomDatabase() {
+    abstract fun articleDao(): ArticleDao
     abstract fun netraDao(): NetraDao
 
     companion object {
