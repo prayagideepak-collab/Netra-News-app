@@ -2,6 +2,7 @@ package com.example.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -15,30 +16,38 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.material.icons.filled.Thunderstorm
+import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -50,10 +59,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.BookmarkReconciliationSummary
+import com.example.data.local.ArticleEntity
 import com.example.data.local.BookmarkEntity
 import com.example.domain.AppLanguage
 import com.example.domain.BulletinDataStatus
 import com.example.domain.EarthquakeEventRecord
+import com.example.domain.EditorialState
+import com.example.domain.OfflineSyncStatus
+import com.example.domain.RightsStatus
+import com.example.domain.VerificationStatus
 import com.example.domain.WeatherAdvisoryRecord
 import com.example.ui.theme.BreakingCrimson
 import com.example.ui.theme.BreakingCrimsonBg
@@ -68,13 +83,19 @@ import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldBg
 
 /**
- * Saved Bookmarks Screen (Section 1.2, 3.5, 4.1 Stage 2):
- * Bookmarks and preferences stay local by default. No account or cloud sync.
+ * Saved Bookmarks & Offline Reading Mode Screen (Section 1.2, 3.5, 4.1 Stage 2 + Offline Reading Mode):
+ * - Allows users to bookmark articles and read them completely offline without internet access.
+ * - Clearly marks saved articles as OFFLINE CONTENT and surfaces graceful sync status when an article
+ *   is updated, retracted/blocked, or removed from the upstream live feed.
  */
 @Composable
 fun SavedBookmarksScreen(
     bookmarks: List<BookmarkEntity>,
+    offlineArticles: List<ArticleEntity> = emptyList(),
     language: AppLanguage,
+    isOfflineMode: Boolean = false,
+    reconciliationSummary: BookmarkReconciliationSummary? = null,
+    onOpenOfflineArticle: (ArticleEntity) -> Unit = {},
     onRemoveBookmark: (String) -> Unit,
     onClearAllBookmarks: () -> Unit,
     onOpenExternalUrl: (String) -> Unit,
@@ -83,6 +104,35 @@ fun SavedBookmarksScreen(
     BackHandler { onNavigateBackHome() }
     val isHi = language == AppLanguage.HINDI
 
+    // Merge Room ArticleEntity (primary offline reading table) with any legacy BookmarkEntity rows
+    val effectiveArticles: List<ArticleEntity> = remember(offlineArticles, bookmarks) {
+        if (offlineArticles.isNotEmpty()) {
+            offlineArticles
+        } else {
+            bookmarks.map { b ->
+                ArticleEntity(
+                    id = b.articleId,
+                    title = b.title,
+                    language = b.language,
+                    category = b.category,
+                    scope = b.scopeWire,
+                    cityId = b.cityId,
+                    publisherName = b.publisherName,
+                    sourceUrl = b.canonicalSourceUrl,
+                    publishedAt = b.publishedAtIso,
+                    fetchedAt = b.savedAtEpochMs,
+                    verificationStatus = b.verificationStatusWire,
+                    rightsStatus = b.rightsStatusWire,
+                    stateCode = b.stateCode,
+                    permittedSummary = b.permittedSummary,
+                    savedAtEpochMs = b.savedAtEpochMs,
+                    isBookmarked = true,
+                    offlineSyncStatus = OfflineSyncStatus.AVAILABLE_OFFLINE.wireKey
+                )
+            }
+        }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -90,63 +140,104 @@ fun SavedBookmarksScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Offline Reading Mode Header Card
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = NetraAmberMuted),
-                border = BorderStroke(1.dp, NetraAmberDeep),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isOfflineMode) StaleAmberBg else NetraAmberMuted
+                ),
+                border = BorderStroke(
+                    1.5.dp,
+                    if (isOfflineMode) StaleAmber else NetraAmberDeep
+                ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = null,
-                        tint = NetraNavyDeep,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (isHi) {
-                                "100% स्थानीय बुकमार्क (Local Room Storage Only)"
-                            } else {
-                                "100% On-Device Bookmarks (No Cloud Sync)"
-                            },
-                            style = MaterialTheme.typography.titleSmall,
-                            color = NetraNavyDeep,
-                            fontWeight = FontWeight.Bold
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isOfflineMode) Icons.Default.CloudOff else Icons.Default.DownloadDone,
+                            contentDescription = null,
+                            tint = if (isOfflineMode) StaleAmber else VerifiedEmerald,
+                            modifier = Modifier.size(24.dp)
                         )
-                        Text(
-                            text = if (isHi) {
-                                "धारा 3.5: आपके सहेजे गए लेख केवल आपके फ़ोन पर रहते हैं। कोई लॉगिन खाता, क्लाउड सिंक या विज्ञापन ट्रैकिंग नहीं।"
-                            } else {
-                                "Sec 3.5: Saved items stay strictly on your phone. Zero cloud accounts, sync, or advertising IDs."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NetraNavyDeep
-                        )
-                    }
-                    if (bookmarks.isNotEmpty()) {
-                        OutlinedButton(
-                            onClick = onClearAllBookmarks,
-                            modifier = Modifier.testTag("clear_all_bookmarks_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteSweep,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isHi) {
+                                    "ऑफ़लाइन पठन मोड • सहेजे गए लेख (${effectiveArticles.size})"
+                                } else {
+                                    "Offline Reading Mode • Saved Articles (${effectiveArticles.size})"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
+                                color = NetraNavyDeep,
+                                fontWeight = FontWeight.Bold
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(if (isHi) "सब हटाएं" else "Clear")
+                            Text(
+                                text = if (isOfflineMode) {
+                                    if (isHi) {
+                                        "इंटरनेट बंद है — नीचे सभी बुकमार्क किए गए लेख बिना नेटवर्क के पढ़ने के लिए उपलब्ध हैं।"
+                                    } else {
+                                        "No internet connection — all saved articles below remain readable offline from Room storage."
+                                    }
+                                } else {
+                                    if (isHi) {
+                                        "100% स्थानीय Room स्टोरेज (बिना इंटरनेट के पठनीय)। लाइव फ़ीड अपडेट होने पर सहेजे गए लेख सुरक्षित रूप से अद्यतन होते हैं।"
+                                    } else {
+                                        "100% On-Device Offline Storage (Readable without internet). Saved copies reconcile updates & removals gracefully."
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NetraNavyDeep
+                            )
+                        }
+                        if (effectiveArticles.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = onClearAllBookmarks,
+                                modifier = Modifier.testTag("clear_all_bookmarks_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteSweep,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (isHi) "सब हटाएं" else "Clear")
+                            }
+                        }
+                    }
+
+                    if (reconciliationSummary != null &&
+                        (reconciliationSummary.updatedCount > 0 ||
+                            reconciliationSummary.retractedOrBlockedCount > 0 ||
+                            reconciliationSummary.removedFromLiveFeedCount > 0)
+                    ) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, NetraAmberDeep),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = if (isHi) {
+                                    "सिंक स्थिति: ${reconciliationSummary.updatedCount} अद्यतन • ${reconciliationSummary.retractedOrBlockedCount} वापस/अवरुद्ध • ${reconciliationSummary.removedFromLiveFeedCount} लाइव से हटाए (ऑफ़लाइन सुरक्षित)"
+                                } else {
+                                    "Sync reconciliation: ${reconciliationSummary.updatedCount} updated • ${reconciliationSummary.retractedOrBlockedCount} retracted/blocked • ${reconciliationSummary.removedFromLiveFeedCount} archived offline"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NetraNavyDeep,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(8.dp)
+                            )
                         }
                     }
                 }
             }
         }
 
-        if (bookmarks.isEmpty()) {
+        if (effectiveArticles.isEmpty()) {
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -159,17 +250,24 @@ fun SavedBookmarksScreen(
                             .padding(28.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.DownloadDone,
+                            contentDescription = null,
+                            tint = NetraAmberDeep,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = if (isHi) "कोई सहेजा गया समाचार नहीं है" else "No Saved Articles Yet",
+                            text = if (isHi) "कोई ऑफ़लाइन लेख सहेजा नहीं गया है" else "No Offline Articles Saved Yet",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = if (isHi) {
-                                "समाचार फ़ीड में किसी भी सत्यापित आइटम पर बुकमार्क आइकन दबाकर उसे ऑफ़लाइन संदर्भ के लिए यहाँ सहेजें।"
+                                "समाचार फ़ीड में किसी भी लेख पर बुकमार्क आइकन दबाएं ताकि आप उसे बिना इंटरनेट के भी यहाँ पढ़ सकें।"
                             } else {
-                                "Tap the bookmark icon on any verified article in the newspaper feed to save its source link locally."
+                                "Tap the bookmark icon on any article in the newspaper feed to save a verified copy for offline reading."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -178,60 +276,202 @@ fun SavedBookmarksScreen(
                 }
             }
         } else {
-            items(bookmarks, key = { it.articleId }) { item ->
+            items(effectiveArticles, key = { it.id }) { entity ->
+                val domainArticle = entity.toDomain()
+                val syncStatus = entity.offlineSyncEnum
+                val isWithheld = syncStatus == OfflineSyncStatus.RETRACTED_OR_BLOCKED ||
+                    domainArticle.verificationStatus == VerificationStatus.BLOCKED ||
+                    domainArticle.editorialState == EditorialState.RETRACTED
+
+                val syncBadgeBg = when (syncStatus) {
+                    OfflineSyncStatus.AVAILABLE_OFFLINE -> VerifiedEmeraldBg
+                    OfflineSyncStatus.UPDATED_FROM_FEED -> NetraAmberMuted
+                    OfflineSyncStatus.REMOVED_FROM_LIVE_FEED -> StaleAmberBg
+                    OfflineSyncStatus.RETRACTED_OR_BLOCKED -> BreakingCrimsonBg
+                }
+                val syncBadgeFg = when (syncStatus) {
+                    OfflineSyncStatus.AVAILABLE_OFFLINE -> VerifiedEmerald
+                    OfflineSyncStatus.UPDATED_FROM_FEED -> NetraAmberDeep
+                    OfflineSyncStatus.REMOVED_FROM_LIVE_FEED -> StaleAmber
+                    OfflineSyncStatus.RETRACTED_OR_BLOCKED -> BreakingCrimson
+                }
+
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    border = BorderStroke(
+                        width = if (isWithheld) 1.5.dp else 1.dp,
+                        color = if (isWithheld) BreakingCrimson else MaterialTheme.colorScheme.outline
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("saved_item_${item.articleId}")
+                        .clickable { onOpenOfflineArticle(entity) }
+                        .testTag("saved_item_${entity.id}")
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
+                        // Top Row: OFFLINE CONTENT badge + Reconciliation Status
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = NetraNavyPrimary,
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DownloadDone,
+                                        contentDescription = null,
+                                        tint = NetraAmberPrimary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isHi) "ऑफ़लाइन सामग्री" else "OFFLINE CONTENT",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = NetraAmberPrimary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                color = syncBadgeBg,
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(1.dp, syncBadgeFg)
+                            ) {
+                                Text(
+                                    text = if (isHi) syncStatus.labelHi else syncStatus.labelEn,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = syncBadgeFg,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
                         Text(
-                            text = "${item.publisherName} • ${item.category}",
+                            text = "${entity.publisherName} • ${entity.category}",
                             style = MaterialTheme.typography.labelMedium,
                             color = VerifiedEmerald,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
+
+                        SourceVerificationStatusBadge(
+                            status = domainArticle.verificationStatus,
+                            isHi = isHi
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = item.title,
+                            text = entity.title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        if (!item.permittedSummary.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.height(6.dp))
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Offline Body / Notice Handling (Graceful update/removal/rights enforcement)
+                        if (isWithheld) {
+                            Surface(
+                                color = BreakingCrimsonBg,
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, BreakingCrimson),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = if (isHi) {
+                                        "संपादकीय/अधिकार अवरोध: यह लेख स्रोत द्वारा वापस लिया या अवरुद्ध किया गया है। असुरक्षित पाठ हटा दिया गया है। कारण: ${entity.verificationReason ?: "अपुष्ट"}"
+                                    } else {
+                                        "Retracted / Blocked Notice: Source retracted or blocked this item during sync; cached prose and link have been withheld. Reason: ${entity.verificationReason ?: "Withheld"}"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = BreakingCrimson,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        } else if (!domainArticle.safePermittedSummary.isNullOrBlank()) {
                             Text(
-                                text = item.permittedSummary,
+                                text = domainArticle.safePermittedSummary.orEmpty(),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        } else {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = if (isHi) {
+                                        "केवल-लिंक बुकमार्क (LINK_ONLY): शीर्षक और स्रोत प्रमाण ऑफ़लाइन उपलब्ध हैं; पूर्ण बाहरी लेख के लिए इंटरनेट आवश्यक है।"
+                                    } else {
+                                        "Link-Only Offline Bookmark: Headline & provenance are readable offline; external publisher link requires internet."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
                         }
+
+                        if (syncStatus == OfflineSyncStatus.REMOVED_FROM_LIVE_FEED) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (isHi) {
+                                    "सूचना: यह लेख अब लाइव फ़ीड में नहीं है, लेकिन आपकी ऑफ़लाइन पठन सूची में सुरक्षित रखा गया है।"
+                                } else {
+                                    "Notice: This article is no longer in the active live feed, but your saved offline copy is preserved."
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = StaleAmber,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
                         Spacer(modifier = Modifier.height(10.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(
-                                text = if (isHi) {
-                                    "सहेजा गया: ${NetraViewModel.formatTimestamp(item.savedAtEpochMs)}"
-                                } else {
-                                    "Saved: ${NetraViewModel.formatTimestamp(item.savedAtEpochMs)}"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row {
-                                IconButton(onClick = { onRemoveBookmark(item.articleId) }) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isHi) {
+                                        "सहेजा गया: ${NetraViewModel.formatTimestamp(entity.savedAtEpochMs)}"
+                                    } else {
+                                        "Saved: ${NetraViewModel.formatTimestamp(entity.savedAtEpochMs)}"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = if (isHi) "ऑफ़लाइन पढ़ने के लिए टैप करें" else "Tap card to read offline",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { onRemoveBookmark(entity.id) },
+                                    modifier = Modifier.testTag("remove_offline_bookmark_${entity.id}")
+                                ) {
                                     Icon(
                                         imageVector = Icons.Default.BookmarkRemove,
-                                        contentDescription = if (isHi) "बुकमार्क हटाएं" else "Remove bookmark",
+                                        contentDescription = if (isHi) "ऑफ़लाइन सूची से हटाएं" else "Remove offline article",
                                         tint = BreakingCrimson
                                     )
                                 }
                                 Button(
-                                    onClick = { onOpenExternalUrl(item.canonicalSourceUrl) },
+                                    onClick = { onOpenExternalUrl(entity.sourceUrl) },
+                                    enabled = !isWithheld && !isOfflineMode,
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = NetraNavyPrimary,
                                         contentColor = NetraAmberPrimary
@@ -239,21 +479,201 @@ fun SavedBookmarksScreen(
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                 ) {
                                     Text(
-                                        text = if (isHi) "स्रोत खोलें" else "Open Source",
+                                        text = when {
+                                            isWithheld -> if (isHi) "लिंक अवरुद्ध" else "Withheld"
+                                            isOfflineMode -> if (isHi) "ऑफ़लाइन (लिंक बंद)" else "Offline"
+                                            else -> if (isHi) "स्रोत खोलें" else "Open Source"
+                                        },
                                         style = MaterialTheme.typography.labelMedium
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp)
-                                    )
+                                    if (!isWithheld && !isOfflineMode) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * In-App Offline Reader Modal Sheet allowing full inspection of saved offline content
+ * without requiring an internet connection.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OfflineArticleReaderSheet(
+    entity: ArticleEntity,
+    isHi: Boolean,
+    isOfflineMode: Boolean,
+    onDismiss: () -> Unit,
+    onRemoveBookmark: (String) -> Unit,
+    onOpenExternalUrl: (String) -> Unit
+) {
+    BackHandler { onDismiss() }
+    val article = entity.toDomain()
+    val syncStatus = entity.offlineSyncEnum
+    val isWithheld = syncStatus == OfflineSyncStatus.RETRACTED_OR_BLOCKED ||
+        article.verificationStatus == VerificationStatus.BLOCKED ||
+        article.editorialState == EditorialState.RETRACTED
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .testTag("offline_reader_sheet")
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    color = NetraNavyPrimary,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = if (isHi) "ऑफ़लाइन पठन मोड • OFFLINE CONTENT" else "OFFLINE READING MODE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NetraAmberPrimary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                Surface(
+                    color = NetraAmberMuted,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = if (isHi) syncStatus.labelHi else syncStatus.labelEn,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NetraNavyDeep,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = article.title,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "${article.publisherName} • ${article.category} • ${article.scope.wireKey.uppercase()}",
+                style = MaterialTheme.typography.labelLarge,
+                color = VerifiedEmerald
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            SourceVerificationStatusBadge(status = article.verificationStatus, isHi = isHi)
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (isWithheld) {
+                Surface(
+                    color = BreakingCrimsonBg,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, BreakingCrimson),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (isHi) {
+                            "यह लेख संपादकीय समीक्षा के दौरान वापस लिया या अवरुद्ध किया गया था। पाठ और असुरक्षित लिंक हटा दिए गए हैं। कारण: ${entity.verificationReason ?: "अपुष्ट"}"
+                        } else {
+                            "This saved article was retracted or blocked during a feed update. Its summary and external URL have been withheld. Reason: ${entity.verificationReason ?: "Withheld"}"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BreakingCrimson,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            } else if (!article.safePermittedSummary.isNullOrBlank()) {
+                Text(
+                    text = article.safePermittedSummary.orEmpty(),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            } else {
+                Text(
+                    text = if (isHi) {
+                        "यह एक केवल-लिंक (LINK_ONLY) सहेजा गया लेख है। शीर्षक, प्रकाशक और सत्यापन विवरण ऑफ़लाइन पठनीय हैं; पूर्ण लेख ऑनलाइन स्रोत URL पर उपलब्ध है।"
+                    } else {
+                        "This bookmark is a LINK_ONLY attribution record. Headline, publisher, and verification provenance are preserved offline; full article prose remains at the publisher's HTTPS portal."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Published: ${article.publishedAt ?: "Unknown"} • Saved Offline: ${NetraViewModel.formatTimestamp(entity.savedAtEpochMs)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Source URL: ${if (isWithheld) "[Withheld]" else article.sourceUrl}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        onRemoveBookmark(entity.id)
+                        onDismiss()
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BookmarkRemove,
+                        contentDescription = null,
+                        tint = BreakingCrimson,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (isHi) "ऑफ़लाइन से हटाएं" else "Remove Offline")
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onDismiss) {
+                        Text(if (isHi) "बंद करें" else "Close")
+                    }
+                    Button(
+                        onClick = { onOpenExternalUrl(article.sourceUrl) },
+                        enabled = !isWithheld && !isOfflineMode,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NetraNavyPrimary,
+                            contentColor = NetraAmberPrimary
+                        )
+                    ) {
+                        Text(
+                            if (isOfflineMode) {
+                                if (isHi) "इंटरनेट आवश्यक" else "Needs Internet"
+                            } else {
+                                if (isHi) "स्रोत खोलें" else "Open Source"
+                            }
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }

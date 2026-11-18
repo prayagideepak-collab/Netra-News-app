@@ -1,5 +1,8 @@
 package com.example
 
+import com.example.data.remote.FeedEnvelopeDto
+import com.example.data.remote.FeedbackRequestDto
+import com.example.data.remote.NetraNetworkClient
 import com.example.domain.ArticleRecord
 import com.example.domain.CorrectionEntry
 import com.example.domain.EditorialState
@@ -525,5 +528,73 @@ class ExampleUnitTest {
         cb = PowerBudgetAndTierManager.recordFailureAndComputeBackoff(cb, "Net timeout 3", 3000L, 500L)
         assertTrue(cb.isOpen)
         assertEquals(3, cb.consecutiveFailures)
+    }
+
+    @Test
+    fun `moshi parses FeedEnvelopeDto, serializes BIASED_REPORTING FeedbackRequestDto, and Retrofit enforces HTTPS`() {
+        val sampleJson = """
+            {
+              "schemaVersion": 1,
+              "generatedAt": "2026-11-06T05:30:00Z",
+              "coverage": ["local:in-up-lucknow"],
+              "items": [
+                {
+                  "id": "up-lko-901",
+                  "title": "लखनऊ जल निकासी सुधार कार्य शुरू",
+                  "language": "hi",
+                  "category": "Civic",
+                  "scope": "local",
+                  "countryCode": "IN",
+                  "stateCode": "UP",
+                  "cityId": "in-up-lucknow",
+                  "publisherName": "PIB India",
+                  "sourceUrl": "https://pib.gov.in/PressReleasePage.aspx?PRID=901",
+                  "publishedAt": "2026-11-06T05:00:00+05:30",
+                  "verificationStatus": "verified",
+                  "rightsStatus": "original",
+                  "editorialState": "active",
+                  "permittedSummary": "आधिकारिक विज्ञप्ति के अनुसार नालों की सफाई प्रारंभ की गई।"
+                }
+              ],
+              "sourceHealth": []
+            }
+        """.trimIndent()
+
+        val feedAdapter = NetraNetworkClient.moshi.adapter(FeedEnvelopeDto::class.java)
+        val dto = feedAdapter.fromJson(sampleJson)
+        assertNotNull(dto)
+        val envelope = dto!!.toDomain(referenceNowEpochMs)
+        assertEquals(1, envelope.schemaVersion)
+        assertEquals(1, envelope.items.size)
+        assertEquals("up-lko-901", envelope.items.first().id)
+        assertEquals(VerificationStatus.VERIFIED, envelope.items.first().verificationStatus)
+
+        // Biased reporting issue type wire key and Moshi request serialization
+        assertEquals("biasedReporting", FeedbackIssueType.BIASED_REPORTING.wireKey)
+        val feedbackPayload = FeedbackSubmissionPayload(
+            feedbackId = "fb-bias-01",
+            idempotencyToken = "idem-bias-01",
+            articleId = "up-lko-901",
+            articleTitleSnapshot = "लखनऊ जल निकासी सुधार कार्य शुरू",
+            issueType = FeedbackIssueType.BIASED_REPORTING,
+            description = "This headline omits opposing civic department figures mentioned in the release.",
+            optionalComments = null,
+            optionalContact = null,
+            createdAtClientEpochMs = referenceNowEpochMs
+        )
+        val reqAdapter = NetraNetworkClient.moshi.adapter(FeedbackRequestDto::class.java)
+        val serializedReq = reqAdapter.toJson(FeedbackRequestDto.fromDomain(feedbackPayload))
+        assertTrue(serializedReq.contains("\"issueType\":\"biasedReporting\""))
+        assertTrue(serializedReq.contains("\"articleId\":\"up-lko-901\""))
+
+        // Retrofit client rejects cleartext HTTP base URLs
+        var threwForHttp = false
+        try {
+            NetraNetworkClient.createApiService("http://insecure.example.com/")
+        } catch (_: IllegalArgumentException) {
+            threwForHttp = true
+        }
+        assertTrue(threwForHttp)
+        assertNotNull(NetraNetworkClient.createApiService(NetraNetworkClient.STAGE1_PLACEHOLDER_BASE_URL))
     }
 }

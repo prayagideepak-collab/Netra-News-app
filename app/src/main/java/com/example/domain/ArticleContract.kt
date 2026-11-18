@@ -331,15 +331,54 @@ enum class FeedbackIssueType(
     val labelHi: String,
     val labelEn: String
 ) {
-    INACCURACY("inaccuracy", "तथ्यात्मक त्रुटि (Inaccuracy)", "Factual Inaccuracy"),
-    BROKEN_LINK("brokenLink", "टूटा हुआ लिंक (Broken Link)", "Broken Source Link"),
-    OUTDATED("outdated", "पुरानी सूचना (Outdated Info)", "Outdated Information"),
-    OTHER("other", "अन्य लेख समस्या (Other Article Issue)", "Other Article Issue"),
-    GENERAL("general", "सामान्य प्रतिक्रिया (General Feedback)", "General App Feedback");
+    INACCURACY("inaccuracy", "गलत जानकारी (Incorrect Info)", "Incorrect information"),
+    BIASED_REPORTING("biasedReporting", "पक्षपातपूर्ण रिपोर्टिंग (Biased Reporting)", "Biased reporting"),
+    BROKEN_LINK("brokenLink", "टूटा हुआ लिंक (Broken Link)", "Broken link"),
+    OUTDATED("outdated", "पुरानी सूचना (Outdated Info)", "Outdated information"),
+    OTHER("other", "अन्य लेख समस्या (Other Issue)", "Other issue"),
+    GENERAL("general", "सामान्य प्रतिक्रिया (General Feedback)", "General feedback");
 
     companion object {
         fun fromWire(value: String?): FeedbackIssueType? =
             entries.firstOrNull { it.wireKey.equals(value?.trim(), ignoreCase = true) }
+    }
+}
+
+/**
+ * Offline Reading Sync Status for bookmarked articles (Offline Reading Mode):
+ * Ensures saved articles clearly mark offline availability and handle updates or removal
+ * from upstream live feeds gracefully.
+ */
+enum class OfflineSyncStatus(
+    val wireKey: String,
+    val labelHi: String,
+    val labelEn: String
+) {
+    AVAILABLE_OFFLINE(
+        "available_offline",
+        "ऑफ़लाइन उपलब्ध (Available Offline)",
+        "Available Offline"
+    ),
+    UPDATED_FROM_FEED(
+        "updated_from_feed",
+        "नवीनतम संस्करण से अद्यतन (Updated Offline Copy)",
+        "Updated from Latest Feed"
+    ),
+    REMOVED_FROM_LIVE_FEED(
+        "removed_from_live_feed",
+        "लाइव फ़ीड से हटाया गया — ऑफ़लाइन सुरक्षित",
+        "Removed from Live Feed — Kept Offline"
+    ),
+    RETRACTED_OR_BLOCKED(
+        "retracted_or_blocked",
+        "संपादकीय वापसी/अवरोध (Content Withheld)",
+        "Retracted or Blocked — Details Withheld"
+    );
+
+    companion object {
+        fun fromWire(value: String?): OfflineSyncStatus =
+            entries.firstOrNull { it.wireKey.equals(value?.trim(), ignoreCase = true) }
+                ?: AVAILABLE_OFFLINE
     }
 }
 

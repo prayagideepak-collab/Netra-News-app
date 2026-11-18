@@ -48,8 +48,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.FeedbackDraftEntity
+import com.example.domain.ArticleRecord
 import com.example.domain.FeedbackIssueType
 import com.example.domain.ValidationAndRightsEngine
 import com.example.ui.theme.BreakingCrimson
@@ -80,6 +82,7 @@ import com.example.ui.theme.VerifiedEmeraldBg
 fun FeedbackReportModalSheet(
     prefilledArticleId: String?,
     prefilledArticleTitle: String?,
+    availableArticles: List<ArticleRecord> = emptyList(),
     initialIssueType: FeedbackIssueType,
     feedbackBannerMessage: String?,
     feedbackBannerIsError: Boolean,
@@ -99,6 +102,12 @@ fun FeedbackReportModalSheet(
 ) {
     BackHandler { onDismiss() }
 
+    var selectedArticleId by rememberSaveable(prefilledArticleId) {
+        mutableStateOf(prefilledArticleId)
+    }
+    var selectedArticleTitle by rememberSaveable(prefilledArticleId, prefilledArticleTitle) {
+        mutableStateOf(prefilledArticleTitle)
+    }
     var selectedIssueType by rememberSaveable { mutableStateOf(initialIssueType) }
     var descriptionText by rememberSaveable { mutableStateOf("") }
     var commentsText by rememberSaveable { mutableStateOf("") }
@@ -115,7 +124,7 @@ fun FeedbackReportModalSheet(
                 .testTag("feedback_report_sheet")
         ) {
             Text(
-                text = if (prefilledArticleId != null) {
+                text = if (selectedArticleId != null) {
                     if (isHi) "लेख समस्या रिपोर्ट करें (Report Article Issue)" else "Report Article Issue (Section 8)"
                 } else {
                     if (isHi) "सामान्य प्रतिक्रिया (General Feedback)" else "General Feedback (Section 8)"
@@ -127,8 +136,68 @@ fun FeedbackReportModalSheet(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Prefilled Article ID Banner (if reporting a specific article)
-            if (prefilledArticleId != null) {
+            // Interactive News Item Selector (User can pick any news item or keep General Feedback)
+            if (availableArticles.isNotEmpty()) {
+                Text(
+                    text = if (isHi) {
+                        "0. समाचार आइटम चुनें (वैकल्पिक • Select News Item):"
+                    } else {
+                        "0. Select News Item (Optional • Pick Article or General):"
+                    },
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedArticleId == null,
+                        onClick = {
+                            selectedArticleId = null
+                            selectedArticleTitle = null
+                        },
+                        label = {
+                            Text(
+                                text = if (isHi) "सामान्य (कोई लेख नहीं)" else "General (No Article)",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = NetraNavyPrimary,
+                            selectedLabelColor = NetraAmberPrimary
+                        ),
+                        modifier = Modifier.testTag("feedback_article_general")
+                    )
+                    availableArticles.forEach { art ->
+                        FilterChip(
+                            selected = selectedArticleId == art.id,
+                            onClick = {
+                                selectedArticleId = art.id
+                                selectedArticleTitle = art.title
+                            },
+                            label = {
+                                Text(
+                                    text = art.title.take(28) + if (art.title.length > 28) "…" else "",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = NetraNavyPrimary,
+                                selectedLabelColor = NetraAmberPrimary
+                            ),
+                            modifier = Modifier.testTag("feedback_article_${art.id}")
+                        )
+                    }
+                }
+            }
+
+            // Selected Article Banner (if reporting a specific article)
+            if (selectedArticleId != null) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(6.dp),
@@ -136,13 +205,13 @@ fun FeedbackReportModalSheet(
                 ) {
                     Column(modifier = Modifier.padding(10.dp)) {
                         Text(
-                            text = "Article ID (Prefilled): $prefilledArticleId",
+                            text = "Article ID: $selectedArticleId",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        if (!prefilledArticleTitle.isNullOrBlank()) {
+                        if (!selectedArticleTitle.isNullOrBlank()) {
                             Text(
-                                text = prefilledArticleTitle,
+                                text = selectedArticleTitle.orEmpty(),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -392,8 +461,8 @@ fun FeedbackReportModalSheet(
                         Button(
                             onClick = {
                                 onSaveLocalDraft(
-                                    prefilledArticleId,
-                                    prefilledArticleTitle,
+                                    selectedArticleId,
+                                    selectedArticleTitle,
                                     selectedIssueType,
                                     descriptionText,
                                     commentsText.ifBlank { null },
@@ -449,9 +518,17 @@ fun FeedbackReportModalSheet(
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
                             Text(
-                                text = "Draft ID: ${draft.feedbackId} • Type: ${draft.issueTypeWire} ${if (draft.articleId != null) "• Article: ${draft.articleId}" else ""}",
+                                text = "ID: ${draft.feedbackId} • Type: ${draft.issueTypeWire}" +
+                                    (if (draft.articleId != null) " • Article: ${draft.articleId}" else ""),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Status: ${draft.deliveryStatus}" +
+                                    (if (!draft.receiptId.isNullOrBlank()) " • Receipt: ${draft.receiptId}" else ""),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (draft.deliveryStatus == "SENT_TO_REVIEW_ENDPOINT") VerifiedEmerald else StaleAmber,
+                                fontWeight = FontWeight.Medium
                             )
                             Text(
                                 text = draft.description,

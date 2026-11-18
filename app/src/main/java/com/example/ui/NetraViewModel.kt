@@ -6,7 +6,10 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.BookmarkReconciliationSummary
+import com.example.data.DataRepository
 import com.example.data.NetraRepository
+import com.example.data.local.ArticleEntity
 import com.example.data.local.BookmarkEntity
 import com.example.data.local.FeedbackDraftEntity
 import com.example.data.local.HealthLogEntity
@@ -89,6 +92,8 @@ data class NetraUiState(
     val circuitBreaker: CircuitBreakerState = CircuitBreakerState(),
     val diagnosticMode: DiagnosticContractMode = DiagnosticContractMode.LIVE_NORMAL,
     val selectedArticleDetail: ArticleRecord? = null,
+    val selectedOfflineArticleDetail: ArticleEntity? = null,
+    val offlineReconciliationSummary: BookmarkReconciliationSummary? = null,
     val showCityPickerDialog: Boolean = false,
     val showFeedbackModal: Boolean = false,
     val feedbackPrefilledArticleId: String? = null,
@@ -98,11 +103,16 @@ data class NetraUiState(
     val feedbackStatusIsError: Boolean = false,
     val externalBrowserStatusBanner: String? = null,
     val isAppInForeground: Boolean = true
-)
+) {
+    val isOfflineMode: Boolean
+        get() = !powerTelemetry.isNetworkConnected ||
+            diagnosticMode == DiagnosticContractMode.SIMULATE_OFFLINE
+}
 
 class NetraViewModel(
     private val appContext: Context,
-    private val repository: NetraRepository
+    private val repository: NetraRepository,
+    private val dataRepository: DataRepository? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(NetraUiState())
@@ -110,6 +120,10 @@ class NetraViewModel(
 
     val bookmarksState: StateFlow<List<BookmarkEntity>> = repository.bookmarksFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val offlineBookmarksState: StateFlow<List<ArticleEntity>> =
+        (dataRepository?.offlineBookmarkEntitiesFlow ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val feedbackDraftsState: StateFlow<List<FeedbackDraftEntity>> = repository.feedbackDraftsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -184,6 +198,10 @@ class NetraViewModel(
 
     fun openArticleDetail(article: ArticleRecord?) {
         _uiState.update { it.copy(selectedArticleDetail = article) }
+    }
+
+    fun openOfflineArticleDetail(article: ArticleEntity?) {
+        _uiState.update { it.copy(selectedOfflineArticleDetail = article) }
     }
 
     /**
@@ -264,12 +282,16 @@ class NetraViewModel(
             }
             is FeedbackValidationOutcome.ValidReadyForSubmissionOrDraft -> {
                 recentFeedbackAttemptTimestamps.add(nowMs)
-                val delivery = ValidationAndRightsEngine.processFeedbackDelivery(
-                    validatedPayload = validation.sanitizedPayload,
-                    isPrivateEndpointConnected = false // Honest Stage-1 state: private Worker+D1 not yet connected
-                )
                 viewModelScope.launch {
-                    repository.saveLocalFeedbackDraft(validation.sanitizedPayload)
+                    val delivery = if (dataRepository != null) {
+                        dataRepository.submitOrLogFeedback(validation.sanitizedPayload)
+                    } else {
+                        repository.saveLocalFeedbackDraft(validation.sanitizedPayload)
+                        ValidationAndRightsEngine.processFeedbackDelivery(
+                            validatedPayload = validation.sanitizedPayload,
+                            isPrivateEndpointConnected = false
+                        )
+                    }
                     val msg = when (delivery) {
                         is FeedbackDeliveryResult.DisabledBackendSavedLocalDraftOnly -> {
                             if (isHi) delivery.honestUnavailableMessageHi else delivery.honestUnavailableMessageEn
@@ -460,20 +482,33 @@ class NetraViewModel(
 
     fun toggleBookmark(article: ArticleRecord) {
         viewModelScope.launch {
-            val savedIds = bookmarksState.value.map { it.articleId }.toSet()
-            repository.toggleBookmark(article, savedIds)
+            val savedIds = (bookmarksState.value.map { it.articleId } +
+                offlineBookmarksState.value.map { it.id }).toSet()
+            if (dataRepository != null) {
+                dataRepository.toggleOfflineBookmark(article, savedIds)
+            } else {
+                repository.toggleBookmark(article, savedIds)
+            }
         }
     }
 
     fun removeBookmark(articleId: String) {
         viewModelScope.launch {
-            repository.removeBookmark(articleId)
+            if (dataRepository != null) {
+                dataRepository.removeOfflineBookmark(articleId)
+            } else {
+                repository.removeBookmark(articleId)
+            }
         }
     }
 
     fun clearAllBookmarks() {
         viewModelScope.launch {
-            repository.clearAllBookmarks()
+            if (dataRepository != null) {
+                dataRepository.clearAllOfflineBookmarks()
+            } else {
+                repository.clearAllBookmarks()
+            }
         }
     }
 
@@ -632,6 +667,16 @@ class NetraViewModel(
             if (validation.verifiedDisplayableItems.isNotEmpty()) {
                 repository.cacheVerifiedArticlesBatch(validation.verifiedDisplayableItems, wallNowMs)
             }
+            val reconciliationSummary = dataRepository?.reconcileSavedBookmarksWithFeed(
+                latestActiveArticles = validation.verifiedDisplayableItems,
+                retractedOrBlockedArticles = validation.retractedNoticeItems +
+                    validation.warningStatusRecords.filter {
+                        it.verificationStatus == com.example.domain.VerificationStatus.BLOCKED ||
+                            it.rightsStatus == com.example.domain.RightsStatus.BLOCKED
+                    },
+                syncedAtEpochMs = wallNowMs,
+                markMissingAsRemovedFromFeed = diagMode == DiagnosticContractMode.SIMULATE_EMPTY
+            )
             val resetCb = PowerBudgetAndTierManager.recordSuccessReset()
             repository.appendBoundedHealthLog(
                 currentTelemetry.effectiveTier,
@@ -649,7 +694,8 @@ class NetraViewModel(
                     rejectedAuditEntries = validation.rejectedOrFilteredItems,
                     sourceHealthList = targetEnvelope.sourceHealth,
                     weatherBulletins = weather,
-                    earthquakeBulletins = earthquakes
+                    earthquakeBulletins = earthquakes,
+                    offlineReconciliationSummary = reconciliationSummary
                 )
             }
 
@@ -762,11 +808,15 @@ class NetraViewModel(
             return sdf.format(Date(epochMs))
         }
 
-        fun provideFactory(context: Context, repository: NetraRepository): ViewModelProvider.Factory =
+        fun provideFactory(
+            context: Context,
+            repository: NetraRepository,
+            dataRepository: DataRepository? = null
+        ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return NetraViewModel(context.applicationContext, repository) as T
+                    return NetraViewModel(context.applicationContext, repository, dataRepository) as T
                 }
             }
     }

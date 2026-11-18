@@ -15,19 +15,22 @@ import androidx.room.Transaction
 import androidx.room.Update
 import com.example.domain.Article
 import com.example.domain.ArticleRecord
+import com.example.domain.EditorialState
 import com.example.domain.NewsScope
+import com.example.domain.OfflineSyncStatus
 import com.example.domain.RightsStatus
 import com.example.domain.VerificationStatus
 import kotlinx.coroutines.flow.Flow
 
 /**
  * Room Entity representing a saved / bookmarked Article on the local device
- * (Build Specification v3, Sections 2.1, 3.1, 3.5 & 7.1).
+ * (Build Specification v3, Sections 2.1, 3.1, 3.5 & 7.1 + Offline Reading Mode).
  *
  * Includes all required fields of [Article] (`id`, `title`, `language`, `category`,
  * `scope`, `cityId`, `publisherName`, `sourceUrl`, `publishedAt`, `fetchedAt`,
- * `verificationStatus`, and `rightsStatus`) plus bookmark metadata (`savedAtEpochMs`,
- * `isBookmarked`, `stateCode`, `permittedSummary`).
+ * `verificationStatus`, and `rightsStatus`) plus offline sync metadata
+ * (`savedAtEpochMs`, `lastSyncedEpochMs`, `isBookmarked`, `offlineSyncStatus`,
+ * `editorialState`, `verificationReason`, `stateCode`, `permittedSummary`).
  */
 @Entity(tableName = "articles")
 data class ArticleEntity(
@@ -46,19 +49,25 @@ data class ArticleEntity(
     val stateCode: String? = null,
     val permittedSummary: String? = null,
     val savedAtEpochMs: Long = System.currentTimeMillis(),
-    val isBookmarked: Boolean = true
+    val isBookmarked: Boolean = true,
+    val offlineSyncStatus: String = OfflineSyncStatus.AVAILABLE_OFFLINE.wireKey,
+    val lastSyncedEpochMs: Long = savedAtEpochMs,
+    val editorialState: String = EditorialState.ACTIVE.wireKey,
+    val verificationReason: String? = null
 ) {
     /**
      * Converts this Room [ArticleEntity] back into a domain [Article],
-     * enforcing LINK_ONLY / BLOCKED summary stripping rules.
+     * enforcing LINK_ONLY / BLOCKED / RETRACTED summary stripping rules.
      */
     fun toDomain(): Article {
         val parsedVerification = VerificationStatus.fromWire(verificationStatus)
         val parsedRights = RightsStatus.fromWire(rightsStatus)
+        val parsedEditorial = EditorialState.fromWire(editorialState)
         val safeSummary = if (
             parsedRights == RightsStatus.LINK_ONLY ||
             parsedRights == RightsStatus.BLOCKED ||
-            parsedVerification == VerificationStatus.BLOCKED
+            parsedVerification == VerificationStatus.BLOCKED ||
+            parsedEditorial == EditorialState.RETRACTED
         ) {
             null
         } else {
@@ -78,9 +87,15 @@ data class ArticleEntity(
             verificationStatus = parsedVerification,
             rightsStatus = parsedRights,
             stateCode = stateCode,
-            permittedSummary = safeSummary
+            permittedSummary = safeSummary,
+            verificationCheckedAt = publishedAt,
+            verificationReason = verificationReason,
+            editorialState = parsedEditorial
         )
     }
+
+    val offlineSyncEnum: OfflineSyncStatus
+        get() = OfflineSyncStatus.fromWire(offlineSyncStatus)
 
     /**
      * Converts this [ArticleEntity] into a [BookmarkEntity] for UI compatibility.
@@ -113,7 +128,9 @@ data class ArticleEntity(
         fun fromDomain(
             article: Article,
             savedAtEpochMs: Long = System.currentTimeMillis(),
-            isBookmarked: Boolean = true
+            isBookmarked: Boolean = true,
+            offlineSyncStatus: OfflineSyncStatus = OfflineSyncStatus.AVAILABLE_OFFLINE,
+            lastSyncedEpochMs: Long = savedAtEpochMs
         ): ArticleEntity = ArticleEntity(
             id = article.id,
             title = article.title,
@@ -130,7 +147,11 @@ data class ArticleEntity(
             stateCode = article.stateCode,
             permittedSummary = article.safePermittedSummary,
             savedAtEpochMs = savedAtEpochMs,
-            isBookmarked = isBookmarked
+            isBookmarked = isBookmarked,
+            offlineSyncStatus = offlineSyncStatus.wireKey,
+            lastSyncedEpochMs = lastSyncedEpochMs,
+            editorialState = article.editorialState.wireKey,
+            verificationReason = article.verificationReason
         )
 
         /**
@@ -139,18 +160,22 @@ data class ArticleEntity(
         fun fromArticleRecord(
             record: ArticleRecord,
             savedAtEpochMs: Long = System.currentTimeMillis(),
-            isBookmarked: Boolean = true
+            isBookmarked: Boolean = true,
+            offlineSyncStatus: OfflineSyncStatus = OfflineSyncStatus.AVAILABLE_OFFLINE,
+            lastSyncedEpochMs: Long = savedAtEpochMs
         ): ArticleEntity = fromDomain(
             article = Article.fromArticleRecord(record),
             savedAtEpochMs = savedAtEpochMs,
-            isBookmarked = isBookmarked
+            isBookmarked = isBookmarked,
+            offlineSyncStatus = offlineSyncStatus,
+            lastSyncedEpochMs = lastSyncedEpochMs
         )
     }
 }
 
 /**
  * Room Data Access Object (`ArticleDao`) supporting full reactive & suspend CRUD operations
- * for saved bookmarks (`ArticleEntity` / `Article`).
+ * for saved bookmarks (`ArticleEntity` / `Article`) and graceful offline updates/removals.
  */
 @Dao
 interface ArticleDao {
@@ -216,7 +241,7 @@ interface ArticleDao {
     suspend fun clearAllBookmarks()
 
     // -------------------------------------------------------------------------
-    // Domain CRUD Helper Methods for Saved Bookmarks
+    // Domain CRUD & Offline Reconciliation Helper Methods
     // -------------------------------------------------------------------------
 
     @Transaction
@@ -225,21 +250,55 @@ interface ArticleDao {
             ArticleEntity.fromDomain(
                 article = article,
                 savedAtEpochMs = savedAtEpochMs,
-                isBookmarked = true
+                isBookmarked = true,
+                offlineSyncStatus = OfflineSyncStatus.AVAILABLE_OFFLINE,
+                lastSyncedEpochMs = savedAtEpochMs
             )
         )
     }
 
     @Transaction
-    suspend fun updateSavedBookmark(article: Article, savedAtEpochMs: Long = System.currentTimeMillis()) {
-        updateBookmark(
+    suspend fun updateSavedBookmark(
+        article: Article,
+        syncStatus: OfflineSyncStatus = OfflineSyncStatus.UPDATED_FROM_FEED,
+        syncedAtEpochMs: Long = System.currentTimeMillis()
+    ) {
+        val existing = getArticleById(article.id)
+        val preservedSavedAt = existing?.savedAtEpochMs ?: syncedAtEpochMs
+        insertBookmark(
             ArticleEntity.fromDomain(
                 article = article,
-                savedAtEpochMs = savedAtEpochMs,
-                isBookmarked = true
+                savedAtEpochMs = preservedSavedAt,
+                isBookmarked = true,
+                offlineSyncStatus = syncStatus,
+                lastSyncedEpochMs = syncedAtEpochMs
             )
         )
     }
+
+    @Query(
+        "UPDATE articles SET offlineSyncStatus = :syncStatus, lastSyncedEpochMs = :syncedAtEpochMs " +
+            "WHERE id = :articleId AND isBookmarked = 1"
+    )
+    suspend fun updateOfflineSyncStatus(
+        articleId: String,
+        syncStatus: String,
+        syncedAtEpochMs: Long
+    )
+
+    @Query(
+        "UPDATE articles SET offlineSyncStatus = 'retracted_or_blocked', " +
+            "editorialState = :editorialState, verificationStatus = :verificationStatus, " +
+            "verificationReason = :reason, permittedSummary = NULL, lastSyncedEpochMs = :syncedAtEpochMs " +
+            "WHERE id = :articleId AND isBookmarked = 1"
+    )
+    suspend fun markBookmarkRetractedOrBlocked(
+        articleId: String,
+        editorialState: String,
+        verificationStatus: String,
+        reason: String?,
+        syncedAtEpochMs: Long
+    )
 
     @Transaction
     suspend fun removeBookmark(articleId: String) {
@@ -264,7 +323,9 @@ interface ArticleDao {
                 ArticleEntity.fromDomain(
                     article = article,
                     savedAtEpochMs = savedAtEpochMs,
-                    isBookmarked = true
+                    isBookmarked = true,
+                    offlineSyncStatus = OfflineSyncStatus.AVAILABLE_OFFLINE,
+                    lastSyncedEpochMs = savedAtEpochMs
                 )
             )
             true
@@ -274,7 +335,7 @@ interface ArticleDao {
 
 /**
  * Primary Room Database (`AppDatabase`) exposing both [ArticleDao] (for `ArticleEntity` bookmark CRUD)
- * and [NetraDao] (for cached feeds, local feedback drafts, and bounded health logs).
+ * and [NetraDao] (for cached feeds, local feedback drafts/logs, and bounded health logs).
  */
 @Database(
     entities = [
@@ -284,7 +345,7 @@ interface ArticleDao {
         FeedbackDraftEntity::class,
         HealthLogEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

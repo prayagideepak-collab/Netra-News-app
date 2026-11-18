@@ -1039,6 +1039,22 @@ fun BroadsheetArticleCard(
                             )
                         }
                     }
+                    if (isSaved) {
+                        Surface(
+                            color = VerifiedEmeraldBg,
+                            border = BorderStroke(1.dp, VerifiedEmerald),
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier.testTag("offline_saved_badge_${article.id}")
+                        ) {
+                            Text(
+                                text = if (isHi) "ऑफ़लाइन सहेजा गया" else "OFFLINE SAVED",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = VerifiedEmerald,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
 
                 Surface(

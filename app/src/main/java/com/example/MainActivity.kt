@@ -43,6 +43,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.DataRepository
 import com.example.data.NetraRepository
 import com.example.data.local.AppDatabase
 import com.example.domain.AppLanguage
@@ -56,6 +57,7 @@ import com.example.ui.ManualCityPickerDialog
 import com.example.ui.NetraFamilyHeader
 import com.example.ui.NetraViewModel
 import com.example.ui.NewspaperFeedScreen
+import com.example.ui.OfflineArticleReaderSheet
 import com.example.ui.SavedBookmarksScreen
 import com.example.ui.WeatherAndEarthquakesScreen
 import com.example.ui.theme.NetraAmberPrimary
@@ -74,10 +76,11 @@ class MainActivity : ComponentActivity() {
             dao = database.netraDao(),
             articleDao = database.articleDao()
         )
+        val dataRepository = DataRepository.createDefault(database)
 
         setContent {
             val netraViewModel: NetraViewModel = viewModel(
-                factory = NetraViewModel.provideFactory(applicationContext, repository)
+                factory = NetraViewModel.provideFactory(applicationContext, repository, dataRepository)
             )
             val uiState by netraViewModel.uiState.collectAsStateWithLifecycle()
 
@@ -96,6 +99,7 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val uiState by netraViewModel.uiState.collectAsStateWithLifecycle()
     val bookmarks by netraViewModel.bookmarksState.collectAsStateWithLifecycle()
+    val offlineBookmarks by netraViewModel.offlineBookmarksState.collectAsStateWithLifecycle()
     val feedbackDrafts by netraViewModel.feedbackDraftsState.collectAsStateWithLifecycle()
     val healthLogs by netraViewModel.healthLogsState.collectAsStateWithLifecycle()
 
@@ -133,7 +137,8 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
 
     var currentBottomTab by rememberSaveable { mutableIntStateOf(0) }
     val isHi = uiState.language == AppLanguage.HINDI
-    val savedIds = bookmarks.map { it.articleId }.toSet()
+    val savedIds = (bookmarks.map { it.articleId } + offlineBookmarks.map { it.id }).toSet()
+    val savedCount = maxOf(bookmarks.size, offlineBookmarks.size)
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -175,8 +180,8 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
                     icon = {
                         BadgedBox(
                             badge = {
-                                if (bookmarks.isNotEmpty()) {
-                                    Badge { Text("${bookmarks.size}") }
+                                if (savedCount > 0) {
+                                    Badge { Text("$savedCount") }
                                 }
                             }
                         ) {
@@ -266,7 +271,11 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
 
                 1 -> SavedBookmarksScreen(
                     bookmarks = bookmarks,
+                    offlineArticles = offlineBookmarks,
                     language = uiState.language,
+                    isOfflineMode = uiState.isOfflineMode,
+                    reconciliationSummary = uiState.offlineReconciliationSummary,
+                    onOpenOfflineArticle = { netraViewModel.openOfflineArticleDetail(it) },
                     onRemoveBookmark = { netraViewModel.removeBookmark(it) },
                     onClearAllBookmarks = { netraViewModel.clearAllBookmarks() },
                     onOpenExternalUrl = { url ->
@@ -313,11 +322,30 @@ fun NetraNewsRootApp(netraViewModel: NetraViewModel) {
             )
         }
 
+        // Offline Reader Bottom Sheet
+        val offlineDetail = uiState.selectedOfflineArticleDetail
+        if (offlineDetail != null) {
+            OfflineArticleReaderSheet(
+                entity = offlineDetail,
+                isHi = isHi,
+                isOfflineMode = uiState.isOfflineMode,
+                onDismiss = { netraViewModel.openOfflineArticleDetail(null) },
+                onRemoveBookmark = { id ->
+                    netraViewModel.removeBookmark(id)
+                    netraViewModel.openOfflineArticleDetail(null)
+                },
+                onOpenExternalUrl = { url ->
+                    netraViewModel.openExternalSourceUrlSafely(context, url)
+                }
+            )
+        }
+
         // Section 8 Feedback & Issue Report Modal Sheet
         if (uiState.showFeedbackModal) {
             FeedbackReportModalSheet(
                 prefilledArticleId = uiState.feedbackPrefilledArticleId,
                 prefilledArticleTitle = uiState.feedbackPrefilledArticleTitle,
+                availableArticles = (uiState.allVerifiedArticles + uiState.warningStatusRecords).distinctBy { it.id },
                 initialIssueType = uiState.feedbackInitialIssueType,
                 feedbackBannerMessage = uiState.feedbackStatusMessage,
                 feedbackBannerIsError = uiState.feedbackStatusIsError,

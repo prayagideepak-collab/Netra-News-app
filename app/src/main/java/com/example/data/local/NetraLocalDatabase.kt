@@ -205,7 +205,9 @@ data class FeedbackDraftEntity(
     val optionalComments: String?,
     val optionalContact: String?,
     val createdAtEpochMs: Long,
-    val reviewStatusWire: String = FeedbackReviewStatus.NEW.wireKey
+    val reviewStatusWire: String = FeedbackReviewStatus.NEW.wireKey,
+    val deliveryStatus: String = "LOGGED_LOCALLY",
+    val receiptId: String? = null
 ) {
     fun toDomain(): FeedbackSubmissionPayload = FeedbackSubmissionPayload(
         feedbackId = feedbackId,
@@ -220,7 +222,11 @@ data class FeedbackDraftEntity(
     )
 
     companion object {
-        fun fromDomain(payload: FeedbackSubmissionPayload): FeedbackDraftEntity = FeedbackDraftEntity(
+        fun fromDomain(
+            payload: FeedbackSubmissionPayload,
+            deliveryStatus: String = "LOGGED_LOCALLY",
+            receiptId: String? = null
+        ): FeedbackDraftEntity = FeedbackDraftEntity(
             feedbackId = payload.feedbackId,
             idempotencyToken = payload.idempotencyToken,
             articleId = payload.articleId,
@@ -230,7 +236,9 @@ data class FeedbackDraftEntity(
             optionalComments = payload.optionalComments,
             optionalContact = payload.optionalContact,
             createdAtEpochMs = payload.createdAtClientEpochMs,
-            reviewStatusWire = payload.reviewStatus.wireKey
+            reviewStatusWire = payload.reviewStatus.wireKey,
+            deliveryStatus = deliveryStatus,
+            receiptId = receiptId
         )
     }
 }
@@ -307,7 +315,7 @@ interface NetraDao {
         FeedbackDraftEntity::class,
         HealthLogEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class NetraLocalDatabase : RoomDatabase() {
